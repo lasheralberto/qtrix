@@ -27,6 +27,7 @@ import {
   type CellInfo,
   type ChatEvent,
   type ChatTurn,
+  type ContextUsage,
   type PlanStep,
   type Scratch,
 } from "./api";
@@ -49,6 +50,8 @@ export interface Turn {
   running: boolean;
   /** The panel block that was last when the turn started: the turn sits right after it (null = top of the panel). */
   after: string | null;
+  /** The conversation filled the model's context and was folded into a summary before this turn. */
+  compacted?: boolean;
 }
 
 export const SUGGESTIONS = [
@@ -69,6 +72,7 @@ function turnsFrom(history: ChatTurn[]): Turn[] {
         tools: [],
         running: false,
         after: m.after_block ?? null,
+        compacted: m.compacted,
       });
       continue;
     }
@@ -95,26 +99,39 @@ function turnsFrom(history: ChatTurn[]): Turn[] {
 /** Chat state for the unified panel: the turns, whether the agent is working, and how to talk to it. */
 export function useChat(
   lastBlock: () => string | null,
-  notebookId: string | null,
+  /** The conversation shown ("<notebook>/<thread>"); null while it is not known yet. */
+  conversation: string | null,
 ) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
+  const [context, setContext] = useState<ContextUsage | null>(null);
+  const [compacting, setCompacting] = useState(false);
   const abort = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
 
-  // Each notebook has its own conversation: load it when the notebook changes.
+  // The meter's thresholds come with GET /chat/context; turn events only update the counts.
+  const refreshContext = useCallback(
+    () => api.chatContext().then(setContext).catch(() => {}),
+    [],
+  );
+  const updateContext = (c: ContextUsage) =>
+    setContext((prev) => ({ ...prev, used: c.used, limit: c.limit, estimated: c.estimated }));
+
+  // Each conversation of a notebook has its own chat: load it when the conversation changes.
   useEffect(() => {
     setTurns([]);
-    if (!notebookId) return;
+    setContext(null);
+    if (!conversation) return;
     let cancelled = false;
     api
       .history()
       .then((h) => !cancelled && setTurns(turnsFrom(h)))
       .catch(() => {});
+    refreshContext();
     return () => {
       cancelled = true;
     };
-  }, [notebookId]);
+  }, [conversation, refreshContext]);
 
   const patchLast = (fn: (t: Turn) => Turn) =>
     setTurns((prev) =>
@@ -187,6 +204,13 @@ export function useChat(
       case "error":
         patchLast((t) => ({ ...t, error: ev.message }));
         break;
+      case "context":
+        updateContext(ev);
+        break;
+      case "compacted":
+        updateContext(ev);
+        patchLast((t) => ({ ...t, compacted: true }));
+        break;
     }
   }
 
@@ -224,9 +248,86 @@ export function useChat(
   );
 
   const stop = () => abort.current?.abort();
-  const reset = () => api.resetChat().then(() => setTurns([]));
+  const reset = () =>
+    api.resetChat().then(() => {
+      setTurns([]);
+      refreshContext();
+    });
+  /** Fold the conversation into a summary now (the meter's button). */
+  const compact = async () => {
+    if (busyRef.current) return;
+    setCompacting(true);
+    try {
+      setContext(await api.compactChat());
+    } finally {
+      setCompacting(false);
+    }
+  };
 
-  return { turns, busy, send, stop, reset };
+  return { turns, busy, send, stop, reset, context, compacting, compact, refreshContext };
+}
+
+const fmtTokens = (n: number) =>
+  n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${+(n / 1000).toFixed(1)}k` : `${n}`;
+
+/** How full the model's context is: a ring next to the model picker. A click compacts the conversation now. */
+export function ContextMeter({
+  context,
+  busy,
+  compacting,
+  onCompact,
+}: {
+  context: ContextUsage | null;
+  busy: boolean;
+  compacting: boolean;
+  onCompact(): void;
+}) {
+  if (!context || !context.limit) return null;
+  const share = Math.min(context.used / context.limit, 1);
+  const at = context.compact_at ?? 0.8;
+  const level = share >= at ? "full" : share >= at * 0.75 ? "high" : "";
+  const r = 7;
+  const arc = 2 * Math.PI * r;
+  const auto = context.auto_compact !== false;
+  const title =
+    `Contexto: ${context.estimated ? "~" : ""}${context.used.toLocaleString()} de ` +
+    `${context.limit.toLocaleString()} tokens (${Math.round(share * 100)} %)\n` +
+    (auto
+      ? `Se compacta automáticamente al ${Math.round(at * 100)} %.`
+      : "La compactación automática está desactivada.") +
+    "\nPulsa para compactar ahora.";
+  return (
+    <button
+      type="button"
+      className={`ctx-meter ${level}`}
+      title={title}
+      aria-label={title}
+      onClick={onCompact}
+      disabled={busy || compacting || context.used === 0}
+    >
+      {compacting ? (
+        <LoaderCircle size={14} className="spin" />
+      ) : (
+        <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden>
+          <circle className="ctx-track" cx="9" cy="9" r={r} />
+          <circle
+            className="ctx-fill"
+            cx="9"
+            cy="9"
+            r={r}
+            strokeDasharray={arc}
+            strokeDashoffset={arc * (1 - share)}
+            transform="rotate(-90 9 9)"
+          />
+        </svg>
+      )}
+      <span className="ctx-label">
+        {context.estimated ? "~" : ""}
+        {fmtTokens(context.used)}
+        <span className="muted"> / {fmtTokens(context.limit)}</span>
+      </span>
+    </button>
+  );
 }
 
 /** Tools whose calls are not listed among a turn's actions in the panel. */
@@ -260,6 +361,11 @@ export function TurnHead(props: {
   const n = cells.length;
   return (
     <section className="turn-head">
+      {turn.compacted && (
+        <div className="turn-compacted" title="El agente sigue a partir de un resumen de lo anterior; aquí ves la conversación entera">
+          Conversación compactada
+        </div>
+      )}
       <div className="turn-question">{turn.question}</div>
       {turn.intro && (
         <div className="turn-intro">
@@ -347,6 +453,8 @@ export function TurnAnswer({ turn }: { turn: Turn }) {
 export interface ComposerHandle {
   /** Put the cursor in the composer, optionally starting the message with ``prefill``. */
   focus(prefill?: string): void;
+  /** Replace the message with ``text`` and select its first «…» placeholder, so typing fills it in. */
+  fill(text: string): void;
 }
 
 export const Composer = forwardRef<
@@ -357,8 +465,10 @@ export const Composer = forwardRef<
     onStop(): void;
     onReset(): void;
     modelPicker: ReactNode;
+    /** The context meter, shown next to the model picker. */
+    meter?: ReactNode;
   }
->(function Composer({ busy, onSend, onStop, onReset, modelPicker }, ref) {
+>(function Composer({ busy, onSend, onStop, onReset, modelPicker, meter }, ref) {
   const [input, setInput] = useState("");
   const area = useRef<HTMLTextAreaElement>(null);
 
@@ -370,6 +480,18 @@ export const Composer = forwardRef<
         if (!el) return;
         el.focus();
         el.setSelectionRange(el.value.length, el.value.length);
+      });
+    },
+    fill(text) {
+      setInput(text);
+      requestAnimationFrame(() => {
+        const el = area.current;
+        if (!el) return;
+        el.focus();
+        const start = text.indexOf("«");
+        const end = start < 0 ? -1 : text.indexOf("»", start);
+        if (end < 0) el.setSelectionRange(text.length, text.length);
+        else el.setSelectionRange(start, end + 1);
       });
     },
   }));
@@ -404,6 +526,7 @@ export const Composer = forwardRef<
       />
       <div className="composer-bar">
         {modelPicker}
+        {meter}
         <span className="spacer" />
         <button
           type="button"

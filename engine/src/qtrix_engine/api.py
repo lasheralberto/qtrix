@@ -21,9 +21,18 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response, Streami
 from pydantic import BaseModel, Field
 
 from . import __version__
+from .agents.autocompact import context_window
 from .agents.lead import ChatSession, build_lead_agent
 from .config import LAYOUT, Settings, bootstrap_dir, resolve_home
-from .context import EngineContext, activate, active_context, set_context
+from .context import (
+    DEFAULT_THREAD_TITLE,
+    EngineContext,
+    Thread,
+    activate,
+    activate_thread,
+    active_context,
+    set_context,
+)
 from .dispatch import Call, PolicyDenied, dispatch
 from .journal import JournalEntryNotFound
 from .kernel import CellFailed, KernelError, KernelPool
@@ -46,6 +55,7 @@ from .localai.jobs import JobManager
 from .localai.llamacpp import VARIANTS, LlamaRuntime, platform_key
 from .localai.models import ModelStore
 from .memory import NotebookMemory, ProjectMemory, fastembed_embedder
+from .methods import methods_catalog
 from .notebooks import NotebookManager, NotebookNotFound
 from .objects.store import LockedObjectError, ObjectError, ObjectNotFound, ObjectStore
 from .objects.views import compute as compute_view
@@ -56,7 +66,7 @@ from .qx.code import run_cell
 from .qx.forms import names as qx_names
 from .qx.forms import signatures as qx_signatures
 from .replay import ReplayError, UndoError, replay
-from .state import Autosave, StateStore
+from .state import Autosave, StateStore, title_from
 from .tools._format import clean, df_block_data
 from .tools.registry import NAMESPACES, all_tools, catalog
 from .workspace import DatasetNotFound, Workspace
@@ -70,11 +80,19 @@ KERNEL_IDLE = 1800.0
 
 
 def _in_use(ctx: EngineContext) -> bool:
-    return ctx.chat_lock.locked() or ctx.kernels.project.busy or ctx.panel.has_subscribers()
+    return (ctx.chat_lock.locked() or ctx.kernels.project.busy
+            or any(t.panel.has_subscribers() for t in ctx.threads.values()))
 
 
 _NOTEBOOK_ROUTE = re.compile(r"^/notebooks/([^/]+)(/.*)$")
 _NOTEBOOK_OWN = ("/open", "/duplicate")  # routes of the notebook entity itself, not of its content
+_THREAD_ROUTE = re.compile(r"^/threads/([^/]+)(/.*)$")
+_THREAD_OWN = ("/open",)
+
+
+class ThreadNotFound(KeyError):
+    def __str__(self) -> str:
+        return f"Conversación '{self.args[0]}' no encontrada"
 
 
 class ImportRequest(BaseModel):
@@ -86,6 +104,10 @@ class ImportRequest(BaseModel):
 class NotebookRequest(BaseModel):
     title: str | None = None
     description: str | None = None
+
+
+class ThreadRequest(BaseModel):
+    title: str | None = None
 
 
 class PanelStructureRequest(BaseModel):
@@ -257,10 +279,10 @@ class Engine:
                 ctx = EngineContext(settings=self.settings, workspace=Workspace(nb.db_path), notebook=nb,
                                     allow_agent_code=self.user.agent.allow_code)
                 self._attach_memory(ctx)
-                ctx.chat, ctx.chat_lock = ChatSession(), asyncio.Lock()
+                ctx.chat_lock = asyncio.Lock()
                 ctx.kernels = KernelPool(lambda: self._kernel_env(nb.id), cwd=nb.dir)
-                ctx.autosave = Autosave(StateStore(ctx.workspace), ctx.panel, ctx.chat)
-                ctx.autosave.load()  # the conversation and the report come back as they were
+                ctx.autosave = Autosave(StateStore(ctx.workspace), ctx, ChatSession)
+                ctx.autosave.load()  # the conversations and their reports come back as they were
                 ctx.last_used = time.monotonic()
                 self._contexts[notebook_id] = ctx
                 self._evict()
@@ -369,6 +391,50 @@ class Engine:
             self.default_id = self.notebooks.current().id
             set_context(self.open(self.default_id))
 
+    # ---- conversations (threads) of the notebook of the request -----------------------------------------------
+    def thread(self, thread_id: str) -> Thread:
+        thread = self.ctx.threads.get(thread_id)
+        if thread is None:
+            raise ThreadNotFound(thread_id)
+        return thread
+
+    def thread_dict(self, thread: Thread) -> dict[str, Any]:
+        return {**thread.to_dict(), "current": thread.id == self.ctx.thread_id}
+
+    def list_threads(self) -> list[dict[str, Any]]:
+        return [self.thread_dict(t) for t in self.ctx.threads.values()]
+
+    def create_thread(self, title: str | None = None) -> dict[str, Any]:
+        """A new, empty conversation on the notebook's data; it becomes the one in use."""
+        ctx = self.ctx
+        thread = ctx.autosave.add(Thread(f"th-{secrets.token_hex(4)}", (title or "").strip() or DEFAULT_THREAD_TITLE))
+        ctx.thread_id = thread.id
+        return self.thread_dict(thread)
+
+    def open_thread(self, thread_id: str) -> dict[str, Any]:
+        """Mark a conversation as the one in use: unbound requests (kernel cells, MCP) act on its panel."""
+        self.ctx.thread_id = self.thread(thread_id).id
+        return self.thread_dict(self.ctx.threads[thread_id])
+
+    def rename_thread(self, thread_id: str, title: str) -> dict[str, Any]:
+        thread = self.thread(thread_id)
+        thread.title = title.strip()[:80] or thread.title
+        self.ctx.autosave.save_meta(thread)
+        return self.thread_dict(thread)
+
+    def delete_thread(self, thread_id: str) -> None:
+        """Take a conversation off the notebook (its rows stay in the file). The datasets and objects it made stay."""
+        ctx = self.ctx
+        self.thread(thread_id)
+        if len(ctx.threads) == 1:
+            raise HTTPException(409, "Un cuaderno necesita al menos una conversación")
+        if ctx.chat_lock.locked() and ctx.thread_id == thread_id:
+            raise HTTPException(409, "Espera a que termine el turno en curso")
+        ctx.autosave.remove(thread_id)
+        ctx.threads.pop(thread_id)
+        if ctx.thread_id == thread_id:
+            ctx.thread_id = max(ctx.threads.values(), key=lambda t: t.updated_at).id
+
     def shutdown(self) -> None:
         self._stopping.set()
         with self._contexts_lock:
@@ -453,6 +519,9 @@ class Engine:
             )
         return self._agent
 
+    def context_window(self) -> int:
+        return context_window(self.user.active(), self.user)
+
     def update_settings(self, new: UserSettings) -> UserSettings:
         if self.settings.local_only:
             new.local_only = True
@@ -524,14 +593,29 @@ def create_app(settings: Settings | None = None, *, model_override: Any = None, 
                 return JSONResponse({"detail": "invalid token"}, status_code=401)
         if notebook_id is not None:
             try:
-                activate(engine.open(notebook_id))
+                ctx = engine.open(notebook_id)
+                activate(ctx)
             except NotebookNotFound as exc:
                 return JSONResponse({"detail": str(exc)}, status_code=404)
+            # /notebooks/<id>/threads/<tid>/<route> is <route> on that conversation of the notebook (its chat and
+            # its panel; the data are the notebook's).
+            in_thread = _THREAD_ROUTE.match(path)
+            if in_thread and in_thread.group(2) not in _THREAD_OWN:
+                if in_thread.group(1) not in ctx.threads:
+                    return JSONResponse({"detail": str(ThreadNotFound(in_thread.group(1)))}, status_code=404)
+                activate_thread(in_thread.group(1))
+                path = in_thread.group(2)
+            else:
+                activate_thread(None)  # the conversation open in the UI
             request.scope["path"], request.scope["raw_path"] = path, path.encode()
         return await call_next(request)
 
     @app.exception_handler(NotebookNotFound)
     async def _notebook_not_found(_: Request, exc: NotebookNotFound):
+        return JSONResponse({"detail": str(exc)}, status_code=404)
+
+    @app.exception_handler(ThreadNotFound)
+    async def _thread_not_found(_: Request, exc: ThreadNotFound):
         return JSONResponse({"detail": str(exc)}, status_code=404)
 
     @app.exception_handler(DatasetNotFound)
@@ -610,6 +694,30 @@ def create_app(settings: Settings | None = None, *, model_override: Any = None, 
         await asyncio.to_thread(engine.delete_notebook, notebook_id)
         return {"ok": True}
 
+    # ---- conversations ------------------------------------------------------------
+    # A notebook holds several conversations on the same data; /threads/<tid>/<route> is <route> (chat, panel,
+    # code) on one of them (see the middleware above). Unprefixed routes act on the one open in the UI.
+    @app.get("/threads")
+    async def list_threads() -> list[dict[str, Any]]:
+        return engine.list_threads()
+
+    @app.post("/threads")
+    async def create_thread(req: ThreadRequest | None = None) -> dict[str, Any]:
+        return engine.create_thread(req.title if req else None)
+
+    @app.post("/threads/{thread_id}/open")
+    async def open_thread(thread_id: str) -> dict[str, Any]:
+        return engine.open_thread(thread_id)
+
+    @app.patch("/threads/{thread_id}")
+    async def rename_thread(thread_id: str, req: ThreadRequest) -> dict[str, Any]:
+        return await asyncio.to_thread(engine.rename_thread, thread_id, req.title or "")
+
+    @app.delete("/threads/{thread_id}")
+    async def delete_thread(thread_id: str) -> dict[str, bool]:
+        await asyncio.to_thread(engine.delete_thread, thread_id)
+        return {"ok": True}
+
     # ---- system -------------------------------------------------------------------
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -628,6 +736,11 @@ def create_app(settings: Settings | None = None, *, model_override: Any = None, 
     @app.get("/tools")
     async def tools() -> dict[str, Any]:
         return {"namespaces": NAMESPACES, "tools": catalog()}
+
+    @app.get("/methods")
+    async def methods() -> dict[str, Any]:
+        """The analysis methods by area, for the catalog the user browses before asking the agent."""
+        return {"areas": methods_catalog()}
 
     def run(tool: str, args: dict[str, Any], *, actor: str, channel: str, **meta: Any) -> Any:
         """Every mutation goes through the dispatcher (ADR 0002 §6): journal, policy, locks."""
@@ -1309,12 +1422,36 @@ def create_app(settings: Settings | None = None, *, model_override: Any = None, 
         engine.chat.reset()
         return {"ok": True}
 
+    @app.get("/chat/context")
+    async def chat_context() -> dict[str, Any]:
+        """The context meter: tokens the conversation fills, the model's window and where it auto-compacts."""
+        return {**engine.chat.context(engine.context_window()), "compact_at": engine.user.agent.compact_at,
+                "auto_compact": engine.user.agent.auto_compact}
+
+    @app.post("/chat/compact")
+    async def chat_compact() -> dict[str, Any]:
+        """Fold the conversation into a summary now (the meter's button)."""
+        if not engine.chat.history:
+            return await chat_context()
+        try:
+            engine.validate_model()
+        except (ProviderBlocked, ValueError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        async with engine._chat_lock:
+            await engine.prepare_model()
+            await engine.chat.compact(engine.agent(), engine.context_window())
+        return await chat_context()
+
     @app.post("/chat")
     async def chat(req: ChatRequest) -> StreamingResponse:
         try:
             engine.validate_model()
         except (ProviderBlocked, ValueError, RuntimeError) as exc:
             raise HTTPException(400, str(exc)) from exc
+        thread = engine.ctx.thread
+        if thread.title == DEFAULT_THREAD_TITLE and not thread.chat.transcript:
+            thread.title = title_from(req.message)
+            engine.ctx.autosave.save_meta(thread)
 
         async def events() -> AsyncIterator[str]:
             async with engine._chat_lock:
@@ -1328,7 +1465,10 @@ def create_app(settings: Settings | None = None, *, model_override: Any = None, 
                     agent = engine.agent()
                     async for event in engine.chat.stream(agent, req.message,
                                                           max_tool_calls=engine.user.agent.max_tool_calls,
-                                                          plan=engine.user.agent.planner):
+                                                          plan=engine.user.agent.planner,
+                                                          context_window=engine.context_window()
+                                                          if engine.user.agent.auto_compact else None,
+                                                          compact_at=engine.user.agent.compact_at):
                         if event["type"] == "text":
                             answer.append(event["delta"])
                         elif event["type"] == "tool_call":

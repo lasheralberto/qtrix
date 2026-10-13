@@ -21,17 +21,14 @@ import logging
 import typing
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from pydantic import ConfigDict, ValidationError, create_model
 
 from ..context import get_context
-from ..panel import Block
+from ..panel import Block, PanelState
 from ..tools._format import clean, figure_data, llm_view
 from .store import ObjectError, StoredObject
-
-if TYPE_CHECKING:
-    from ..context import EngineContext
 
 log = logging.getLogger(__name__)
 
@@ -190,22 +187,22 @@ def show(name: str, view_name: str | None = None, params: dict[str, Any] | None 
                                code=result.code, ref=live_ref))
 
 
-def refresh(ctx: EngineContext, name: str, *, new_version: bool) -> None:
+def refresh(panel: PanelState, name: str, *, new_version: bool) -> None:
     """After an object changed: recompute its live blocks; flag its frozen blocks stale when it has a new version."""
-    for block in ctx.panel.blocks():
+    for block in panel.blocks():
         live = block.ref is not None and block.ref.get("object") == name
         if not live:
             if new_version and block.result_id == name and not block.stale:
-                ctx.panel.update(block.id, by_agent=False, stale=True)
+                panel.update(block.id, by_agent=False, stale=True)
             continue
         try:
             result, _ = compute(name, block.ref["view"], block.ref.get("params"))
         except Exception as exc:  # noqa: BLE001 - the block keeps its last content and says it is out of date
             log.info("Live block %s of %s not refreshed: %s", block.id, name, exc)
             if not block.stale:
-                ctx.panel.update(block.id, by_agent=False, stale=True)
+                panel.update(block.id, by_agent=False, stale=True)
             continue
-        ctx.panel.update(block.id, title=result.title, data=result.data, code=result.code, by_agent=False,
+        panel.update(block.id, title=result.title, data=result.data, code=result.code, by_agent=False,
                          stale=False)
 
 

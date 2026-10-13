@@ -33,6 +33,8 @@ class ModelProfile(BaseModel):
     model: str
     base_url: str | None = None
     temperature: float = 0.2
+    #: Tokens the model can hold; None = the provider's default (llama.cpp: the configured ``ctx_size``).
+    context_window: int | None = Field(default=None, ge=1024)
 
     @property
     def is_local(self) -> bool:
@@ -53,6 +55,12 @@ class AgentConfig(BaseModel):
     planner: bool = True
     #: Let the agent run Python cells in the project kernel without asking (they run with the user's privileges).
     allow_code: bool = False
+    #: Fold the conversation into a summary when it fills ``compact_at`` of the model's context window.
+    auto_compact: bool = True
+    compact_at: float = Field(default=0.8, gt=0, le=1)
+    #: Cap on the context the chat may fill, whatever the model's window: every request resends the whole history,
+    #: so a lower cap trades the agent's memory for fewer input tokens per call (Ajustes → Contexto).
+    max_context: int = Field(default=1_000_000, ge=4096)
 
 
 class LlamaCppConfig(BaseModel):

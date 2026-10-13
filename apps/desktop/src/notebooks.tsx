@@ -1,7 +1,25 @@
 // Notebooks (E8·04): the rail lists them like chat sessions; opening one shows everything that lives in it.
 import { BookOpen, Copy, MoreHorizontal, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Notebook } from "./api";
+
+/** Where a row menu opens: under its "..." button. */
+export type MenuAt = { top: number; right: number };
+export const menuAt = (e: { currentTarget: HTMLElement }): MenuAt => {
+  const r = e.currentTarget.getBoundingClientRect();
+  return { top: r.bottom + 2, right: window.innerWidth - r.right };
+};
+
+/** Rendered in body: the sidebar lists scroll (and the rail is transformed), which would clip or misplace it. */
+export function RowMenu(props: { at: MenuAt; children: React.ReactNode }) {
+  return createPortal(
+    <div className="nb-menu" role="menu" style={{ top: props.at.top, right: props.at.right }}>
+      {props.children}
+    </div>,
+    document.body,
+  );
+}
 
 export const UNTITLED = "Cuaderno sin título";
 
@@ -85,6 +103,7 @@ export function NotebookList(props: {
 }) {
   const [query, setQuery] = useState("");
   const [menu, setMenu] = useState<string | null>(null);
+  const [at, setAt] = useState<MenuAt>({ top: 0, right: 0 });
   const [renaming, setRenaming] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
 
@@ -92,7 +111,11 @@ export function NotebookList(props: {
     if (!menu) return;
     const close = () => setMenu(null);
     window.addEventListener("click", close);
-    return () => window.removeEventListener("click", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("scroll", close, true);
+    };
   }, [menu]);
 
   const shown = useMemo(() => {
@@ -173,13 +196,14 @@ export function NotebookList(props: {
                 aria-haspopup="menu"
                 onClick={(e) => {
                   e.stopPropagation();
+                  setAt(menuAt(e));
                   setMenu(menu === nb.id ? null : nb.id);
                 }}
               >
                 <MoreHorizontal size={15} />
               </button>
               {menu === nb.id && (
-                <div className="nb-menu" role="menu">
+                <RowMenu at={at}>
                   <button
                     role="menuitem"
                     onClick={() => {
@@ -202,7 +226,7 @@ export function NotebookList(props: {
                   >
                     <Trash2 size={13} /> Borrar
                   </button>
-                </div>
+                </RowMenu>
               )}
             </li>
           );

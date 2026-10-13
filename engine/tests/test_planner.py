@@ -115,12 +115,21 @@ def test_out_of_budget_the_turn_still_ends_with_an_answer(tmp_path, wages_csv):
 
 
 def test_when_the_model_will_not_answer_the_turn_is_summarised(tmp_path, wages_csv):
-    c = client(tmp_path, wages_csv, scripted([], [("ols_fit", FIT), ""], final=None))
+    c = client(tmp_path, wages_csv, scripted([], [("ols_fit", FIT), ""], final=None), planner=False)
     evs = events(c.post("/chat", json={"message": "estima"}))
     answer = text(evs)
     assert "No he podido redactar la respuesta final" in answer and "`ols_fit` ✓ → eq_educ" in answer
     # Refused tool calls in the final round are not journaled nor shown as cells.
     assert [e["name"] for e in evs if e["type"] == "tool_call"] == ["ols_fit"]
+
+
+def test_a_greeting_gets_a_reply_and_no_actions(tmp_path, wages_csv):
+    # The planner sees nothing to do; an eager executor still tries to describe the data on its own.
+    c = client(tmp_path, wages_csv, scripted([], [("data_summary_stats", {"dataset_id": "wages"}), "¡Hola!"]))
+    evs = events(c.post("/chat", json={"message": "hey"}))
+    assert not any(e["type"] in ("tool_call", "tool_result") for e in evs)
+    assert c.get("/panel").json()["blocks"] == [] and text(evs)
+    assert not [e for e in c.app.state.engine.ctx.journal.list() if e["actor"].startswith("agent")]
 
 
 def test_planner_can_be_switched_off(tmp_path, wages_csv):
@@ -134,7 +143,7 @@ def test_each_cell_carries_the_finding_the_model_wrote_after_it(tmp_path, wages_
         ("Miro los datos.", "data_list_datasets", {}),
         ("Hay un dataset, wages, con lwage y educ.", "ols_fit", FIT),
         "El retorno de la educación es 0.08.",
-    ]))
+    ]), planner=False)
     evs = events(c.post("/chat", json={"message": "retorno de la educación"}))
     calls = [e["id"] for e in evs if e["type"] == "tool_call"]
     found = [e for e in evs if e["type"] == "finding"]
@@ -194,3 +203,32 @@ def test_a_turn_without_plan_has_no_workspace_until_the_agent_writes_one(tmp_pat
     evs = events(c.post("/chat", json={"message": "hola"}))
     assert not any(e["type"] == "scratch" for e in evs)
     assert "scratch" not in c.get("/chat/history").json()[-1]
+
+
+def test_the_planner_asks_before_acting_and_nothing_runs_until_the_user_answers(tmp_path, wages_csv):
+    # The executor script would run an estimate: it must never be reached while the plan waits for answers.
+    model = scripted(["Estimar"], [("ols_fit", FIT), "No debería llegar aquí."],
+                     draft={"questions": ["¿Cuál es la variable de resultado?", "¿Y el tratamiento?"]})
+    c = client(tmp_path, wages_csv, model)
+    evs = events(c.post("/chat", json={"message": "estima el efecto del programa"}))
+    assert not any(e["type"] in ("plan", "tool_call", "tool_result") for e in evs)
+    answer = text(evs)
+    assert "1. ¿Cuál es la variable de resultado?" in answer and "2. ¿Y el tratamiento?" in answer
+    assert evs[-1]["type"] == "done" and not [e for e in c.app.state.engine.ctx.journal.list()
+                                              if e["actor"].startswith("agent")]
+    assert c.get("/chat/history").json()[-1]["content"].strip() == answer.strip()
+
+
+def test_ask_user_ends_the_turn_and_blocks_further_tools(tmp_path, wages_csv):
+    model = scripted(["Estimar", "Comprobar"], [
+        ("ask_user", {"questions": ["¿Qué población te interesa?"]}),
+        ("ols_fit", FIT),  # refused: the user has not answered yet
+        "¿Qué población te interesa?",
+        "No debería llegar aquí.",
+    ])
+    c = client(tmp_path, wages_csv, model)
+    evs = events(c.post("/chat", json={"message": "estima el retorno"}))
+    assert not any(e["type"] == "tool_call" for e in evs)  # neither ask_user nor the refused estimate is a cell
+    assert not any(e["type"] == "status" and "Continuando" in e["message"] for e in evs)  # pending steps: no loop
+    assert text(evs).strip() == "¿Qué población te interesa?"
+    assert not [e for e in c.app.state.engine.ctx.journal.list() if e["actor"].startswith("agent")]

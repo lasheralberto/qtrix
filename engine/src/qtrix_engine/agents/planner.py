@@ -26,6 +26,11 @@ Rules:
   conversation so far. The executor then simply answers.
 - Otherwise 2 to 6 short, concrete steps in the user's language, each one verifiable action: name the dataset,
   variables, estimator or test when you know them ("Estimar OLS de lwage sobre educ y exper con errores HC1").
+- When the request cannot be carried out without a decision only the user can make (the outcome, the treatment or
+  the estimand, which of several readings of the request they mean, a missing identification choice), return NO
+  steps and put 1 to 3 short, concrete questions in `questions`, in the user's language. Nothing runs until they
+  answer, so ask only what blocks the work and cannot be learnt by inspecting the data shown below; whatever has a
+  sensible default, decide it and say so in the plan instead of asking.
 - Start by inspecting data only when the request depends on columns or structure not shown below.
 - Do not add a step for writing the final answer: the executor always ends with it.
 - When you plan steps, also state the goal in one sentence and, when there is a real choice of method, up to 3
@@ -45,6 +50,8 @@ class PlanDraft(BaseModel):
     goal: str = Field("", description="What the turn must achieve, in one sentence (empty without steps).")
     alternatives: list[str] = Field(default_factory=list, max_length=3,
                                     description='Approaches weighed, each "approach: why chosen or discarded".')
+    questions: list[str] = Field(default_factory=list, max_length=3,
+                                 description="Questions the user must answer before anything runs; then no steps.")
 
 
 @dataclass
@@ -106,11 +113,14 @@ class Scratch:
 _plan: ContextVar[Plan | None] = ContextVar("qtrix_plan", default=None)
 _scratch: ContextVar[Scratch | None] = ContextVar("qtrix_scratch", default=None)
 _finalizing: ContextVar[bool] = ContextVar("qtrix_finalizing", default=False)
+#: Questions the executor has put to the user in this turn (a mutable holder: tools run in a copied context).
+_asked: ContextVar[list[str] | None] = ContextVar("qtrix_asked", default=None)
 
 PLAN_TOOLS = frozenset({"plan_update", "plan_revise"})
 SCRATCH_TOOLS = frozenset({"scratch_note"})
+ASK_TOOLS = frozenset({"ask_user"})
 #: Bookkeeping tools of the agent: never shown as Python cells.
-WORK_TOOLS = PLAN_TOOLS | SCRATCH_TOOLS
+WORK_TOOLS = PLAN_TOOLS | SCRATCH_TOOLS | ASK_TOOLS
 NOTE_LIMIT = 400  # characters of one workspace note
 
 
@@ -142,9 +152,47 @@ def finalizing() -> Iterator[None]:
         _finalizing.reset(token)
 
 
+@contextmanager
+def asking(holder: list[str]) -> Iterator[None]:
+    """Collects the questions ``ask_user`` receives; once there are any, every other tool refuses to run."""
+    token = _asked.set(holder)
+    try:
+        yield
+    finally:
+        _asked.reset(token)
+
+
 def check_tools_allowed() -> None:
     if _finalizing.get():
         raise ModelRetry("Tools are disabled now. Write your final answer to the user as text, from the results above.")
+    if _asked.get():
+        raise ModelRetry("You asked the user a question: nothing runs until they answer. Stop calling tools and end "
+                         "your turn with a short text that asks it.")
+
+
+def ask_user(questions: list[str]) -> str:
+    """Ask the user what you need before going on, and stop. Use it when you cannot proceed without a decision only
+    they can make (outcome, treatment, estimand, which reading of the request they mean) and the data cannot tell
+    you. The turn ends after this call and resumes with their answer: do not run anything else meanwhile.
+
+    Args:
+        questions: One to three short, concrete questions, in the user's language.
+    """
+    check_tools_allowed()
+    holder = _asked.get()
+    asked = [" ".join(q.split()) for q in questions if q and q.strip()][:3]
+    if holder is None or not asked:
+        raise ModelRetry("Give at least one question.")
+    holder.extend(asked)
+    return "Questions sent to the user. End your turn now: write them as your reply and wait for the answer."
+
+
+def questions_text(questions: Sequence[str]) -> str:
+    """The reply of a turn that stops to ask: the questions, numbered when there are several."""
+    items = [q.strip() for q in questions if q and q.strip()]
+    if len(items) == 1:
+        return items[0]
+    return "Antes de empezar necesito saber:\n\n" + "\n".join(f"{i}. {q}" for i, q in enumerate(items, 1))
 
 
 def plan_update(step: int, status: Literal["done", "skipped"] = "done", note: str = "") -> str:
@@ -207,6 +255,10 @@ async def _when_scratching(ctx: RunContext[None], tool_def: ToolDefinition) -> T
     return tool_def if _scratch.get() is not None else None
 
 
+async def _when_asking(ctx: RunContext[None], tool_def: ToolDefinition) -> ToolDefinition | None:
+    return tool_def if _asked.get() is not None else None
+
+
 async def _when_planned(ctx: RunContext[None], tool_def: ToolDefinition) -> ToolDefinition | None:
     return tool_def if _plan.get() is not None else None
 
@@ -215,6 +267,7 @@ def plan_toolset() -> FunctionToolset:
     tools = [Tool(fn, takes_ctx=False, docstring_format="google", prepare=_when_planned)
              for fn in (plan_update, plan_revise)]
     tools.append(Tool(scratch_note, takes_ctx=False, docstring_format="google", prepare=_when_scratching))
+    tools.append(Tool(ask_user, takes_ctx=False, docstring_format="google", prepare=_when_asking))
     return FunctionToolset(tools, max_retries=3)
 
 

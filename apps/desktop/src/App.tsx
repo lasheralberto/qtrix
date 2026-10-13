@@ -1,26 +1,32 @@
-// Workbench layout: notebooks and their data in the rail · one analysis panel where the conversation and its results
-// live together (E7·08c). Everything in the panel belongs to the active notebook (E8·04).
-import { Brain, Cloud, Eraser, HardDrive, PanelRight, Redo2, Settings, Sparkles, Undo2 } from "lucide-react";
+// Workbench layout: notebooks, their conversations and their data in the rail · one analysis panel where the
+// conversation and its results live together (E7·08c). The panel shows one conversation of the active notebook; every
+// conversation of a notebook works on its datasets and objects (E8·04).
+import { Eraser, LibraryBig, MessageSquarePlus, PanelLeft, PanelRight, Redo2, Settings, Sparkles, Undo2 } from "lucide-react";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   api,
   notebooks as notebookApi,
   panelEvents,
   setActiveNotebook,
+  setActiveThread,
+  threads as threadApi,
   type Block,
   type Dataset,
   type Notebook,
   type PanelEvent,
+  type Thread,
   type UserSettings,
 } from "./api";
 import { BlockCard } from "./blocks";
-import { Composer, SUGGESTIONS, TurnAnswer, TurnHead, useChat, type ComposerHandle, type Turn } from "./chat";
+import { Composer, ContextMeter, SUGGESTIONS, TurnAnswer, TurnHead, useChat, type ComposerHandle, type Turn } from "./chat";
 import { DatasetList, DatasetModal } from "./data";
+import { MethodAreas, MethodsModal, useMethods } from "./methods";
 import { ModelPicker } from "./modelpicker";
 import { ModelsModal } from "./models";
 import { DraftCell, NotebookRibbon, type Draft } from "./notebook";
 import { EditableTitle, NotebookList, UNTITLED } from "./notebooks";
 import { SettingsModal } from "./settings";
+import { ThreadList } from "./threads";
 import { Workspace } from "./workspace";
 
 function applyPanelEvent(blocks: Block[], ev: PanelEvent): Block[] {
@@ -54,30 +60,40 @@ export default function App() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [notebooks, setNotebooks] = useState<Notebook[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [threadId, setThreadId] = useState<string | null>(null);
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [version, setVersion] = useState(0);
   const [fresh, setFresh] = useState<Set<string>>(new Set());
   const [openDataset, setOpenDataset] = useState<Dataset | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showModels, setShowModels] = useState(false);
+  // The method catalog; the area the modal opens on (null = the first one), undefined while it is closed.
+  const methods = useMethods();
+  const [methodsArea, setMethodsArea] = useState<string | null | undefined>(undefined);
   const [settings, setSettings] = useState<UserSettings | null>(null);
-  const [memory, setMemory] = useState("…");
   const [toast, setToast] = useState<string | null>(null);
   // The agent's workspace: open while it works (the user may close it), on the latest turn unless one was picked.
   const [wsOpen, setWsOpen] = useState(false);
   const [wsTurn, setWsTurn] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
+  // The rail floats like the workspace and can be put away; it always starts open.
+  const [railOpen, setRailOpen] = useState(true);
+  const toggleRail = () => setRailOpen((o) => !o);
   const closeWorkspace = useCallback(() => setWsOpen(false), []);
+  const closeMethods = useCallback(() => setMethodsArea(undefined), []);
   const composer = useRef<ComposerHandle>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true); // follow new content only while the user is at the bottom of the panel
   const blocksRef = useRef<Block[]>([]);
   blocksRef.current = blocks;
   const lastBlock = useCallback(() => blocksRef.current[blocksRef.current.length - 1]?.id ?? null, []);
-  const { turns, busy, send, stop, reset } = useChat(lastBlock, activeId);
+  const conversation = activeId && threadId ? `${activeId}/${threadId}` : null;
+  const { turns, busy, send, stop, reset, context, compacting, compact, refreshContext } = useChat(lastBlock, conversation);
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeId;
   const active = notebooks.find((n) => n.id === activeId) ?? null;
+  const thread = threads.find((t) => t.id === threadId) ?? null;
 
   const refreshNotebooks = useCallback(() => notebookApi.list().then(setNotebooks).catch(() => {}), []);
   const refreshDatasets = useCallback(() => {
@@ -107,11 +123,8 @@ export default function App() {
         .catch(() => !cancelled && setTimeout(load, 1000)); // the engine may still be starting
     load();
     api.settings().then(setSettings).catch(() => {});
-    const poll = setInterval(() => api.health().then((h) => setMemory(h.memory)).catch(() => setMemory("offline")), 5000);
-    api.health().then((h) => setMemory(h.memory)).catch(() => {});
     return () => {
       cancelled = true;
-      clearInterval(poll);
     };
   }, []);
 
@@ -119,23 +132,63 @@ export default function App() {
     refreshDatasets();
   }, [refreshDatasets]);
 
-  // Leaving a notebook empties the view before the next one loads, so nothing of the old one lingers.
-  const switchTo = (id: string) => {
-    setActiveNotebook(id);
+  const refreshThreads = useCallback(() => {
+    const id = activeId;
+    if (!id) return Promise.resolve();
+    return threadApi
+      .list()
+      .then((list) => activeRef.current === id && setThreads(list))
+      .catch(() => {});
+  }, [activeId]);
+
+  // The conversations of the notebook: the panel opens on the one the engine has open in it.
+  useEffect(() => {
+    if (!activeId) return;
+    let cancelled = false;
+    threadApi
+      .list()
+      .then((list) => {
+        if (cancelled || !list.length) return;
+        const open = list.find((t) => t.current) ?? list[0];
+        setThreads(list);
+        setActiveThread(open.id);
+        setThreadId(open.id);
+      })
+      .catch(fail);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeId]);
+
+  // Leaving a conversation empties the panel before the next one loads, so nothing of the old one lingers.
+  const clearPanel = () => {
     setBlocks([]);
     setVersion(0);
-    setDatasets([]);
-    setOpenDataset(null);
     setFresh(new Set());
     setWsTurn(null);
     setDraft(null);
     stick.current = true;
+  };
+
+  const switchTo = (id: string) => {
+    setActiveNotebook(id);
+    clearPanel();
+    setThreads([]);
+    setThreadId(null);
+    setDatasets([]);
+    setOpenDataset(null);
     setActiveId(id);
   };
 
-  // Live panel: the engine pushes every operation the agents perform in the active notebook.
+  const showThread = (id: string) => {
+    setActiveThread(id);
+    clearPanel();
+    setThreadId(id);
+  };
+
+  // Live panel: the engine pushes every operation the agents perform in the conversation shown.
   useEffect(() => {
-    if (!activeId) return;
+    if (!conversation) return;
     const ctrl = new AbortController();
     (async () => {
       while (!ctrl.signal.aborted) {
@@ -156,16 +209,24 @@ export default function App() {
       }
     })();
     return () => ctrl.abort();
-  }, [activeId]);
+  }, [conversation]);
 
   // Datasets may be created by agents (transformations, SQL), so refresh after each turn.
   useEffect(() => {
     if (!busy) {
       refreshDatasets();
+      refreshThreads(); // its title and question count
       // The engine may have swapped to an installed local model during the turn.
       api.settings().then(setSettings).catch(() => {});
     }
-  }, [busy, refreshDatasets]);
+  }, [busy, refreshDatasets, refreshThreads]);
+
+  // Another model (or another cap in Ajustes) changes the context limit: the meter follows it.
+  const activeProfile = settings?.active_profile;
+  const { max_context, compact_at, auto_compact } = settings?.agent ?? {};
+  useEffect(() => {
+    if (activeProfile) refreshContext();
+  }, [activeProfile, max_context, compact_at, auto_compact, refreshContext]);
 
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -218,6 +279,44 @@ export default function App() {
       .duplicate(id)
       .then((nb) => (refreshNotebooks(), notify(`Duplicado como «${nb.title}»`)))
       .catch(fail);
+
+  const selectThread = async (id: string) => {
+    if (busy || id === threadId) return;
+    try {
+      await threadApi.open(id);
+      showThread(id);
+      refreshThreads();
+    } catch (e) {
+      fail(e);
+    }
+  };
+
+  // A fresh conversation on the same datasets and objects: the way to start over when one grows too long.
+  const createThread = async () => {
+    if (busy) return;
+    try {
+      const t = await threadApi.create();
+      showThread(t.id);
+      refreshThreads();
+      composer.current?.focus();
+    } catch (e) {
+      fail(e);
+    }
+  };
+
+  const renameThread = (id: string, title: string) => threadApi.rename(id, title).then(refreshThreads).catch(fail);
+
+  const deleteThread = async (id: string) => {
+    if (busy && id === threadId) return notify("Espera a que termine el turno en curso");
+    try {
+      await threadApi.remove(id);
+      const list = await threadApi.list();
+      setThreads(list);
+      if (id === threadId) showThread((list.find((t) => t.current) ?? list[0]).id); // the engine moved on
+    } catch (e) {
+      fail(e);
+    }
+  };
 
   const deleteNotebook = async (id: string) => {
     if (busy && id === activeId) return notify("Espera a que termine el turno en curso");
@@ -304,18 +403,19 @@ export default function App() {
     );
   }
 
-  const model = settings?.profiles.find((p) => p.name === settings.active_profile) ?? settings?.profiles[0];
-  const isLocal = settings?.active_is_local ?? true;
-
   return (
-    <div className={`app ${wsOpen ? "ws-open" : ""}`}>
-      <aside className="rail">
+    <div className={`app ${wsOpen ? "ws-open" : ""} ${railOpen ? "rail-open" : ""}`}>
+      <aside className={`rail ${railOpen ? "open" : ""}`} aria-hidden={!railOpen} inert={!railOpen} aria-label="Cuadernos y datos">
         <div className="brand">
           <span className="logo">q</span>
           <div>
             <strong>qtrix</strong>
             <span className="muted small">econometría agéntica local</span>
           </div>
+          <span className="spacer" />
+          <button className="ghost" title="Ocultar el panel" onClick={toggleRail}>
+            <PanelLeft size={15} />
+          </button>
         </div>
         <NotebookList
           notebooks={notebooks}
@@ -327,15 +427,22 @@ export default function App() {
           onDuplicate={duplicateNotebook}
           onDelete={deleteNotebook}
         />
+        <ThreadList
+          threads={threads}
+          activeId={threadId}
+          locked={busy}
+          onSelect={selectThread}
+          onCreate={createThread}
+          onRename={renameThread}
+          onDelete={deleteThread}
+        />
         <DatasetList datasets={datasets} onChange={refreshDatasets} onOpen={setOpenDataset} onError={notify} />
         <div className="rail-foot">
-          <div className={`badge ${isLocal ? "local" : "cloud"}`} title="Destino de los prompts">
-            {isLocal ? <HardDrive size={13} /> : <Cloud size={13} />}
-            {isLocal ? "Modelo local" : `Prompts → ${model?.provider}`}
-          </div>
-          <div className="badge" title="Memoria semántica (turbovec)">
-            <Brain size={13} /> memoria: {memory}
-          </div>
+          {methods && (
+            <button className="ghost wide" onClick={() => setMethodsArea(null)}>
+              <LibraryBig size={15} /> Métodos
+            </button>
+          )}
           <button className="ghost wide" onClick={() => setShowSettings(true)}>
             <Settings size={15} /> Ajustes
           </button>
@@ -344,9 +451,15 @@ export default function App() {
 
       <main className="panel">
         <header className="panel-head">
-          <div>
+          {!railOpen && (
+            <button className="ghost rail-toggle" title="Mostrar cuadernos y datos" aria-pressed={false} onClick={toggleRail}>
+              <PanelLeft size={16} />
+            </button>
+          )}
+          <div className="panel-title">
             {active ? <EditableTitle value={active.title} onSave={(t) => renameNotebook(active.id, t)} /> : <h1>qtrix</h1>}
             <span className="muted small">
+              {thread && threads.length > 1 && <span className="thread-crumb">{thread.title} · </span>}
               {blocks.length} bloques · v{version}
               {busy && (
                 <span className="working">
@@ -356,6 +469,15 @@ export default function App() {
             </span>
           </div>
           <div className="panel-tools">
+            <button
+              className="ghost"
+              title={busy ? "Espera a que termine el turno en curso" : "Nueva conversación sobre los mismos datos"}
+              aria-label="Nueva conversación"
+              disabled={busy}
+              onClick={createThread}
+            >
+              <MessageSquarePlus size={16} />
+            </button>
             <button
               className={`ghost ws-toggle ${wsOpen ? "on" : ""} ${busy ? "live" : ""}`}
               title={wsOpen ? "Ocultar el espacio de trabajo" : "Espacio de trabajo del agente"}
@@ -391,7 +513,7 @@ export default function App() {
               <span className="empty-mark">
                 <Sparkles size={22} />
               </span>
-              <h2>El cuaderno se construye mientras conversas</h2>
+              <h2>{threads.length > 1 ? "Una conversación nueva sobre los mismos datos" : "El cuaderno se construye mientras conversas"}</h2>
               <p>
                 Importa un dataset a la izquierda y pregunta abajo en lenguaje natural. El agente elegirá estimadores, ejecutará los
                 modelos en tu máquina y sus tablas, contrastes y gráficos aparecerán aquí. Cada acción del agente es una celda de Python
@@ -404,6 +526,7 @@ export default function App() {
                   </button>
                 ))}
               </div>
+              {methods && <MethodAreas areas={methods} onOpen={setMethodsArea} />}
             </div>
           )}
           {renderFeed()}
@@ -420,6 +543,14 @@ export default function App() {
               onChange={setSettings}
               onOpenModels={() => setShowModels(true)}
               onOpenSettings={() => setShowSettings(true)}
+            />
+          }
+          meter={
+            <ContextMeter
+              context={context}
+              busy={busy}
+              compacting={compacting}
+              onCompact={() => compact().catch(fail)}
             />
           }
         />
@@ -443,6 +574,18 @@ export default function App() {
       )}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} onSaved={setSettings} />}
       {showModels && <ModelsModal onClose={() => setShowModels(false)} />}
+      {methods && methodsArea !== undefined && (
+        <MethodsModal
+          areas={methods}
+          datasets={datasets}
+          initialArea={methodsArea}
+          onClose={closeMethods}
+          onUse={(prompt) => {
+            setMethodsArea(undefined);
+            composer.current?.fill(prompt);
+          }}
+        />
+      )}
       {toast && <div className="toast">{toast}</div>}
     </div>
   );

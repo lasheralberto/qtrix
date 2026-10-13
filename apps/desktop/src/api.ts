@@ -102,7 +102,18 @@ export interface UserSettings {
   /** Profiles tried in order when the active model fails (all calls go through the LiteLLM gateway). */
   fallbacks?: string[];
   local_only: boolean;
-  agent: { instructions_extra: string; namespaces: string[] | null; max_tool_calls: number; planner?: boolean };
+  agent: {
+    instructions_extra: string;
+    namespaces: string[] | null;
+    max_tool_calls: number;
+    planner?: boolean;
+    /** Let the agent run Python cells without asking (they run with the user's privileges). */
+    allow_code?: boolean;
+    /** Auto-compaction: fold the conversation at ``compact_at`` of the context, capped at ``max_context`` tokens. */
+    auto_compact?: boolean;
+    compact_at?: number;
+    max_context?: number;
+  };
   llamacpp?: { variant: "cpu" | "vulkan" | "cuda"; ctx_size: number };
   api_keys?: Record<string, boolean>;
   active_is_local?: boolean;
@@ -162,7 +173,22 @@ export type ChatEvent =
   | { type: "text"; delta: string }
   | { type: "status"; message: string }
   | { type: "error"; message: string }
+  /** The context meter after the turn. */
+  | ({ type: "context" } & ContextUsage)
+  /** The conversation filled the context and was folded into a summary (``before`` = tokens it filled). */
+  | ({ type: "compacted"; before: number } & ContextUsage)
   | { type: "done" };
+
+/** How much of the model's context window the conversation fills. */
+export interface ContextUsage {
+  used: number;
+  limit: number;
+  /** No usage reported by the provider: counted from the text. */
+  estimated: boolean;
+  /** Share of the window at which the conversation is compacted (only from ``GET /chat/context``). */
+  compact_at?: number;
+  auto_compact?: boolean;
+}
 
 export interface ChatTurn {
   role: "user" | "assistant";
@@ -176,6 +202,8 @@ export interface ChatTurn {
   turn_id?: string;
   /** The panel block that was last when the turn started (E7·08c): where the turn sits in the panel. */
   after_block?: string | null;
+  /** The conversation was compacted when this question arrived. */
+  compacted?: boolean;
 }
 
 export interface CodeIssue {
@@ -261,14 +289,28 @@ export function engine() {
 // Notebooks (E8·04): everything a notebook holds (datasets, panel, chat, code, objects, journal) is reached as
 // /notebooks/<id>/<route>; what belongs to the app (health, settings, models, notebooks themselves) is not prefixed.
 const GLOBAL_ROUTE = /^\/(health|settings|models|llm|localai|system|notebooks)(?=[/?]|$)/;
+// A notebook holds several conversations on the same data: the chat and the panel of one are reached as
+// /notebooks/<id>/threads/<tid>/<route> (the data routes ignore the conversation).
+const THREADS_ROUTE = /^\/threads(?=[/?]|$)/;
 let activeNotebook: string | null = null;
+let activeThread: string | null = null;
 
-/** Which notebook the notebook-scoped routes act on. */
+/** Which notebook the notebook-scoped routes act on (its open conversation until one is set). */
 export function setActiveNotebook(id: string | null) {
   activeNotebook = id;
+  activeThread = null;
 }
 
-const route = (path: string) => (activeNotebook && !GLOBAL_ROUTE.test(path) ? `/notebooks/${activeNotebook}${path}` : path);
+/** Which conversation of the active notebook the chat and panel routes act on. */
+export function setActiveThread(id: string | null) {
+  activeThread = id;
+}
+
+function route(path: string) {
+  if (!activeNotebook || GLOBAL_ROUTE.test(path)) return path;
+  const thread = activeThread && !THREADS_ROUTE.test(path) ? `/threads/${activeThread}` : "";
+  return `/notebooks/${activeNotebook}${thread}${path}`;
+}
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const { baseUrl, token } = await engine();
@@ -289,6 +331,31 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
+
+/** One analysis method of the catalog (GET /methods): what the user can ask the agent for, by area. */
+export interface AnalysisMethod {
+  id: string;
+  label: string;
+  summary: string;
+  tools: string[];
+  variants: string[];
+  /** Functions of the causal library the agent runs in a Python cell. */
+  library: string[];
+  /** An example request; «…» marks what the user fills in. */
+  prompt: string;
+  /** Data structures the method needs; null = any. */
+  structures: PageKind[] | null;
+  available: boolean;
+  /** Unknown tools or Python modules that are not installed. */
+  missing: string[];
+}
+
+export interface MethodArea {
+  id: string;
+  label: string;
+  summary: string;
+  methods: AnalysisMethod[];
+}
 
 export const api = {
   health: () => request<{ status: string; version: string; memory: string }>("/health"),
@@ -318,7 +385,10 @@ export const api = {
   testModel: (p: ModelProfile) => request<{ ok: boolean; reply?: string; error?: string }>("/models/test", json(p)),
   history: () => request<ChatTurn[]>("/chat/history"),
   resetChat: () => request("/chat/reset", { method: "POST" }),
+  chatContext: () => request<ContextUsage>("/chat/context"),
+  compactChat: () => request<ContextUsage>("/chat/compact", { method: "POST" }),
   tool: <T = any>(name: string, args: Record<string, unknown>) => request<T>(`/tools/${name}`, json(args)),
+  methods: () => request<{ areas: MethodArea[] }>("/methods").then((r) => r.areas),
   freezeBlock: (id: string) => request<Block>(`/panel/blocks/${id}/freeze`, { method: "POST" }),
   // Cells (E7·08b): check as the user types, run an edited cell as a new version.
   checkCode: (code: string) => request<CodeCheck>("/code", json({ code, dry_run: true })),
@@ -355,6 +425,27 @@ export const notebooks = {
   rename: (id: string, title: string) => request<Notebook>(`/notebooks/${id}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   duplicate: (id: string) => request<Notebook>(`/notebooks/${id}/duplicate`, json({})),
   remove: (id: string) => request(`/notebooks/${id}`, { method: "DELETE" }),
+};
+
+/** A conversation of the active notebook: its own chat and panel, on the notebook's datasets and objects. */
+export interface Thread {
+  id: string;
+  title: string;
+  /** Epoch seconds. */
+  created_at: number;
+  updated_at: number;
+  n_turns: number;
+  n_blocks: number;
+  /** The conversation the engine has open in this notebook. */
+  current: boolean;
+}
+
+export const threads = {
+  list: () => request<Thread[]>("/threads"),
+  create: (title?: string) => request<Thread>("/threads", json({ title: title ?? null })),
+  open: (id: string) => request<Thread>(`/threads/${id}/open`, { method: "POST" }),
+  rename: (id: string, title: string) => request<Thread>(`/threads/${id}`, { method: "PATCH", body: JSON.stringify({ title }) }),
+  remove: (id: string) => request(`/threads/${id}`, { method: "DELETE" }),
 };
 
 // ---- local AI: Hugging Face models + embedded llama.cpp ---------------------------------

@@ -41,6 +41,7 @@ from ..objects.store import LockedObjectError, StaleObjectError
 from ..panel import PinnedBlockError
 from ..tools.registry import ToolSpec, all_tools
 from ..workspace import DatasetNotFound
+from . import autocompact as ac
 from . import findings as fx
 from . import planner as pl
 from . import skills as sk
@@ -50,10 +51,17 @@ You are the Lead Econometrician of qtrix, a local-first research workbench. You 
 economist on their own data, which never leaves their machine.
 
 How you work:
-- Act through tools. Inspect data before modelling (data_list_datasets, data_summary_stats); never invent numbers.
+- Do only what the user asks. A greeting, thanks, small talk or a question about you or about what was already
+  done gets a short text reply and no tool calls: never inspect, describe or model data on your own initiative.
+- When the request needs data, act through tools. Inspect data before modelling (data_list_datasets,
+  data_summary_stats); never invent numbers.
 - Respect each dataset's structure (listed below). Cross-sections (surveys, firms in one year…) have no
   time: do not lag them or run time-series tests on them. When a dataset shows a suggested structure, ask
-  the user or confirm it with data_set_structure before using time-series or panel tools; never invent dates.
+  the user (ask_user) or confirm it with data_set_structure before using time-series or panel tools; never
+  invent dates.
+- When you need a decision only the user can make (outcome, treatment, estimand, which reading of the request),
+  call ask_user with your 1-3 questions BEFORE running anything else, then end the turn. Never write a question
+  and carry on in the same turn: the user answers first, you act afterwards. Decide small things yourself.
 - Formulas accept EViews time operators on time series and panels, so do not build lag columns by hand:
   y(-1), d(y), dlog(y), pch(y), L(y, 2), movav(y, 4), @trend, @seas(q), dummy("2008q3"), recode(c, a, b).
   data_genr creates a persistent series from the same expressions. Lags work within entities of a panel and
@@ -112,10 +120,12 @@ MAX_ROUNDS = 3  # executor runs per turn: the first one plus continuations while
 
 @dataclass
 class _Helpers:
-    """The agents that work around a lead agent, with its model: one drafts each turn's plan, one explains cells."""
+    """The agents that work around a lead agent, with its model: one drafts each turn's plan, one explains cells,
+    one folds the conversation into a summary when the context fills up."""
 
     planner: Agent[None, pl.PlanDraft]
     explainer: Agent[None, fx.Findings]
+    compactor: Agent[None, str]
 
 
 #: Helpers by id of the lead agent they were built with.
@@ -195,7 +205,13 @@ def workspace_context() -> str:
             s = d.suggestion
             lines.append(f"  suggested structure (not applied): {s['kind']} freq={s['freq']} date_col={s['date_col']}"
                          + (f" id_col={s['id_col']}" if s.get("id_col") else "") + f" ({s['reason']})")
-    lines.append("\n## Analysis panel (in order)")
+    if len(ctx.threads) > 1:  # other conversations of the notebook may have built objects this one has not seen
+        objects = ctx.objects.list()
+        if objects:
+            names = ", ".join(f"{o.name} ({o.type} v{o.version})" for o in objects[:40])
+            more = f", … {len(objects) - 40} more (obj_list)" if len(objects) > 40 else ""
+            lines.append(f"\n## Objects in the workfile (shared by every conversation of the notebook)\n{names}{more}")
+    lines.append("\n## Analysis panel of this conversation (in order)")
     blocks = ctx.panel.blocks()
     if not blocks:
         lines.append("(empty)")
@@ -233,7 +249,8 @@ def build_lead_agent(model: Any, *, namespaces: Sequence[str] | None = None, ins
         capabilities=sk.skill_capabilities(skills_library),
         retries=TOOL_RETRIES,
     )
-    _helpers[id(agent)] = _Helpers(pl.build_planner(model, namespaces=namespaces), fx.build_explainer(model))
+    _helpers[id(agent)] = _Helpers(pl.build_planner(model, namespaces=namespaces), fx.build_explainer(model),
+                                   ac.build_compactor(model))
     weakref.finalize(agent, _helpers.pop, id(agent), None)
 
     @agent.instructions
@@ -326,6 +343,7 @@ class ChatSession:
         self.history: list[ModelMessage] = []
         self.transcript: list[dict[str, Any]] = []
         self.seen_seq: int | None = None  # journal position at the end of the agent's last turn
+        self.overhead = 0  # tokens of instructions and tool schemas, measured before the last compaction
         #: Called (without arguments) when a turn ends or the chat is reset; the notebook's autosave hangs here.
         self.on_change: Callable[[], None] | None = None
 
@@ -338,6 +356,26 @@ class ChatSession:
         self.seen_seq = None
         if self.on_change is not None:
             self.on_change()
+
+    def context(self, window: int) -> dict[str, Any]:
+        """How much of the model's context window the conversation fills (the meter next to the model picker)."""
+        used, estimated = ac.history_tokens(self.history, overhead=self.overhead)
+        return {"used": used, "limit": window, "estimated": estimated}
+
+    async def compact(self, agent: Agent, window: int) -> dict[str, Any]:
+        """Fold the model's history into a summary. The transcript the user sees stays whole."""
+        before = self.context(window)["used"]
+        self.overhead = ac.overhead(self.history) or self.overhead
+        helpers = _helpers.get(id(agent))
+        self.history = await ac.compact(helpers.compactor if helpers else None, self.history, window=window)
+        if self.on_change is not None:
+            self.on_change()
+        return {"before": before, **self.context(window)}
+
+    def _full(self, window: int | None, compact_at: float) -> bool:
+        # A history that is only the last summary has nothing left to fold (the prompt itself may be what is full).
+        return (window is not None and bool(self.history) and not ac.only_summary(self.history)
+                and self.context(window)["used"] >= window * compact_at)
 
     def user_edits(self) -> str:
         """The changes the user made to the workfile since the agent last answered, for its next prompt."""
@@ -369,10 +407,13 @@ class ChatSession:
         return ("[Workfile changes the user made since your last answer. They are deliberate: build on them, comment "
                 "on the new versions when relevant, and do not revert them.]\n" + "\n".join(lines) + "\n\n")
 
-    async def stream(self, agent: Agent, message: str, *, max_tool_calls: int = 40,
-                     plan: bool = True) -> AsyncIterator[dict[str, Any]]:
+    async def stream(self, agent: Agent, message: str, *, max_tool_calls: int = 40, plan: bool = True,
+                     context_window: int | None = None, compact_at: float = 0.8) -> AsyncIterator[dict[str, Any]]:
         """One turn, plan-and-execute: the planner drafts the steps, the agent's ReAct loop runs them (and is sent
-        back to work while steps are pending), and the turn always closes with a final answer in text."""
+        back to work while steps are pending), and the turn always closes with a final answer in text.
+
+        With a ``context_window``, the history is compacted into a summary whenever it fills ``compact_at`` of it
+        (before the turn and between rounds)."""
         ctx = get_context()
         # The panel and the chat are one surface (E7·08c): a turn sits after the last block present when it started.
         blocks = ctx.panel.blocks()
@@ -384,26 +425,47 @@ class ChatSession:
         yield {"type": "turn", "turn_id": turn.turn_id, "after_block": after_block}
         state = _TurnState(turn_id=turn.turn_id, budget=max_tool_calls)
         try:
+            async for ev in self._compact_if_full(agent, context_window, compact_at):
+                yield ev
             helpers = _helpers.get(id(agent))
+            talk_only = False
             if plan and helpers is not None:
                 yield {"type": "status", "message": "Planificando…"}
-                state.plan, state.scratch = await self._draft_plan(helpers.planner, request, earlier)
+                state.plan, state.scratch, drafted, questions = await self._draft_plan(
+                    helpers.planner, request, earlier)
+                if questions:  # the plan is blocked on the user: nothing runs until they answer
+                    for ev in state.say(pl.questions_text(questions)):
+                        yield ev
+                    state.asked = questions
+                # The planner found nothing to do (a greeting, a question about the conversation): answer in text,
+                # with the tools off, so the agent cannot start an analysis nobody asked for.
+                talk_only = drafted and not state.plan.steps
                 if state.plan.steps:
                     yield {"type": "plan", "steps": state.plan.dump()}
                 if state.scratch:
                     yield {"type": "scratch", **state.scratch.dump()}
             prompt = pl.executor_prompt(request, state.plan)
-            with pl.active_plan(state.plan if state.plan.steps else None), pl.active_scratch(state.scratch):
-                for round_no in range(MAX_ROUNDS):
+            with (pl.active_plan(state.plan if state.plan.steps else None), pl.active_scratch(state.scratch),
+                  pl.asking(state.asked)):
+                if talk_only and not state.asked:
+                    with pl.finalizing():
+                        async for ev in self._round(agent, prompt, state, final=True):
+                            yield ev
+                for round_no in range(0 if talk_only else MAX_ROUNDS):
                     if round_no:
+                        async for ev in self._compact_if_full(agent, context_window, compact_at):
+                            yield ev
                         yield {"type": "status", "message": "Continuando con el plan…"}
                     async for ev in self._round(agent, prompt, state):
                         yield ev
-                    if state.stopped or state.budget <= 0:
+                    if state.stopped or state.budget <= 0 or state.asked:
                         break
                     if not state.plan.pending():
                         break
                     prompt = pl.continue_prompt(state.plan)
+                if state.asked and not state.final_text():  # the agent asked through the tool but wrote nothing
+                    for ev in state.say(pl.questions_text(state.asked)):
+                        yield ev
                 if not state.final_text():
                     yield {"type": "status", "message": "Redactando la respuesta…"}
                     with pl.finalizing():
@@ -431,19 +493,39 @@ class ChatSession:
             self.transcript.append(entry)
             if self.on_change is not None:
                 self.on_change()
+        if context_window is not None:
+            yield {"type": "context", **self.context(context_window)}
         yield {"type": "done"}
+
+    async def _compact_if_full(self, agent: Agent, window: int | None,
+                               compact_at: float) -> AsyncIterator[dict[str, Any]]:
+        if window is None or not self._full(window, compact_at):
+            return
+        yield {"type": "status", "message": "Compactando la conversación…"}
+        info = await self.compact(agent, window)
+        # Marked on the turn's question so the panel shows where the agent's memory was folded.
+        question = next((t for t in reversed(self.transcript) if t["role"] == "user"), None)
+        if question is not None:
+            question["compacted"] = True
+        yield {"type": "compacted", **info}
 
     @staticmethod
     async def _draft_plan(planner: Agent[None, pl.PlanDraft], request: str,
-                          earlier: list[dict[str, Any]]) -> tuple[pl.Plan, pl.Scratch]:
-        """The plan of the turn, and the workspace it opens with (the goal and the alternatives weighed)."""
+                          earlier: list[dict[str, Any]]) -> tuple[pl.Plan, pl.Scratch, bool, list[str]]:
+        """The plan of the turn, the workspace it opens with (the goal and the alternatives weighed), whether the
+        planner answered at all (an empty plan from a failed planner does not mean there is nothing to do) and the
+        questions the user must answer before anything runs (then there are no steps)."""
         try:
             result = await planner.run(pl.planner_prompt(request, workspace_context(), earlier),
                                        usage_limits=UsageLimits(request_limit=3))
-            return pl.Plan.of(result.output.steps), pl.Scratch.of(result.output)
+            draft = result.output
+            questions = [q.strip() for q in draft.questions if q and q.strip()]
+            if questions:
+                return pl.Plan(), pl.Scratch(), True, questions
+            return pl.Plan.of(draft.steps), pl.Scratch.of(draft), True, []
         except Exception as exc:  # noqa: BLE001 - planning is an aid: without a plan the agent still works
             log.warning("Planner failed, running without a plan: %s", exc)
-            return pl.Plan(), pl.Scratch()
+            return pl.Plan(), pl.Scratch(), False, []
 
     @staticmethod
     async def _explain(explainer: Agent[None, fx.Findings], request: str,
@@ -483,7 +565,7 @@ class ChatSession:
                             moved = state.take_finding()
                             if moved is not None:
                                 yield moved
-                            if final or event.part.tool_name in pl.WORK_TOOLS | BOOKKEEPING_TOOLS:
+                            if final or state.asked or event.part.tool_name in pl.WORK_TOOLS | BOOKKEEPING_TOOLS:
                                 continue
                             args = event.part.args_as_dict()
                             cell = {"id": event.part.tool_call_id, "name": event.part.tool_name, "args": args,
@@ -491,13 +573,15 @@ class ChatSession:
                             state.cells[cell["id"]] = cell
                             yield {"type": "tool_call", **cell}
                         elif isinstance(event, FunctionToolResultEvent):
-                            if final:
+                            if final or state.asked:  # once the user is asked, later calls are refused: no cells
                                 continue
                             if event.part.tool_name in pl.PLAN_TOOLS:
                                 yield {"type": "plan", "steps": state.plan.dump()}
                                 continue
                             if event.part.tool_name in pl.SCRATCH_TOOLS:
                                 yield {"type": "scratch", **state.scratch.dump()}
+                                continue
+                            if event.part.tool_name in pl.ASK_TOOLS:
                                 continue
                             if event.part.tool_name in BOOKKEEPING_TOOLS:
                                 continue
@@ -557,6 +641,7 @@ class _TurnState:
     unexplained: list[str] = field(default_factory=list)  # cells whose results the model saw, not yet explained
     intro: str = ""  # what the model said before its first call
     stopped: bool = False  # the loop hit its tool budget or ran out of retries
+    asked: list[str] = field(default_factory=list)  # questions the turn stops on, until the user answers
 
     def final_text(self) -> str:
         return "".join(self.tail).strip()

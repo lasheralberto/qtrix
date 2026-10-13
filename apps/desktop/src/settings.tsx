@@ -1,9 +1,12 @@
 // API keys, privacy mode, the qtrix folder and super-agent configuration. The active model is chosen
 // only in the chat header (modelpicker.tsx).
-import { Activity, FolderOpen, FolderSync, HardDrive, KeyRound, ShieldCheck, X } from "lucide-react";
+import { Activity, Brain, Cloud, FolderOpen, FolderSync, HardDrive, KeyRound, ShieldCheck, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, formatBytes, localai, type LlmUsage, type SystemInfo, type UserSettings } from "./api";
 import { PROVIDERS } from "./modelpicker";
+
+/** Choices for the cap on the conversation's context (tokens). */
+const CONTEXT_PRESETS = [16_000, 32_000, 64_000, 128_000, 200_000, 500_000, 1_000_000];
 
 /** Tokens and cost per model, as recorded by the LiteLLM gateway. */
 function UsageSection() {
@@ -126,6 +129,32 @@ function FolderSection() {
   );
 }
 
+/** Where prompts go and whether the semantic memory is up: what the rail used to show as badges. */
+function StatusSection({ s }: { s: UserSettings }) {
+  const [memory, setMemory] = useState("…");
+  useEffect(() => {
+    const read = () => api.health().then((h) => setMemory(h.memory)).catch(() => setMemory("offline"));
+    read();
+    const poll = setInterval(read, 5000);
+    return () => clearInterval(poll);
+  }, []);
+  const provider = (s.profiles.find((p) => p.name === s.active_profile) ?? s.profiles[0])?.provider;
+  return (
+    <section>
+      <h3>
+        <Activity size={15} /> Estado
+      </h3>
+      <div className="row">
+        {s.active_is_local ? <HardDrive size={14} /> : <Cloud size={14} />}
+        {s.active_is_local ? "Modelo local: los prompts no salen de esta máquina" : `Los prompts se envían a ${provider}`}
+      </div>
+      <div className="row">
+        <Brain size={14} /> Memoria semántica (turbovec): {memory}
+      </div>
+    </section>
+  );
+}
+
 export function SettingsModal({ onClose, onSaved }: { onClose(): void; onSaved(s: UserSettings): void }) {
   const [s, setS] = useState<UserSettings | null>(null);
   const [keys, setKeys] = useState<Record<string, string>>({});
@@ -166,6 +195,8 @@ export function SettingsModal({ onClose, onSaved }: { onClose(): void; onSaved(s
               Los datos nunca se envían: los modelos remotos solo reciben tu conversación y resúmenes de resultados.
             </p>
           </section>
+
+          <StatusSection s={s} />
 
           <section>
             <h3>
@@ -222,6 +253,61 @@ export function SettingsModal({ onClose, onSaved }: { onClose(): void; onSaved(s
                 onChange={(e) => update({ agent: { ...s.agent, planner: e.target.checked } })}
               />
               Planificar antes de actuar (planificador + ejecutor; una llamada al modelo más por mensaje)
+            </label>
+            <label className="row">
+              <input
+                type="checkbox"
+                checked={s.agent.allow_code ?? false}
+                onChange={(e) => update({ agent: { ...s.agent, allow_code: e.target.checked } })}
+              />
+              Ejecución automática de código: el agente ejecuta celdas Python sin pedir confirmación
+            </label>
+            <p className="muted small">
+              El código se ejecuta en el kernel del proyecto con tus mismos permisos (archivos, red). Actívalo solo si confías en el modelo.
+            </p>
+          </section>
+
+          <section>
+            <h3>Contexto de la conversación</h3>
+            <p className="muted small">
+              Cada llamada al modelo reenvía toda la conversación: un contexto más grande da más memoria al agente, pero
+              cuesta más tokens por llamada. El límite efectivo es el menor entre este y la ventana del modelo.
+            </p>
+            <label className="row">
+              Contexto máximo
+              <select
+                value={s.agent.max_context ?? 1_000_000}
+                onChange={(e) => update({ agent: { ...s.agent, max_context: Number(e.target.value) } })}
+              >
+                {[...new Set([...CONTEXT_PRESETS, s.agent.max_context ?? 1_000_000])]
+                  .sort((a, b) => a - b)
+                  .map((n) => (
+                    <option key={n} value={n}>
+                      {n >= 1_000_000 ? `${n / 1_000_000}M` : `${Math.round(n / 1000)}k`} tokens
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label className="row">
+              <input
+                type="checkbox"
+                checked={s.agent.auto_compact ?? true}
+                onChange={(e) => update({ agent: { ...s.agent, auto_compact: e.target.checked } })}
+              />
+              Compactar automáticamente al llegar al
+              <input
+                type="number"
+                min={10}
+                max={100}
+                step={5}
+                value={Math.round((s.agent.compact_at ?? 0.8) * 100)}
+                disabled={s.agent.auto_compact === false}
+                onChange={(e) =>
+                  update({ agent: { ...s.agent, compact_at: Math.min(Math.max(Number(e.target.value), 10), 100) / 100 } })
+                }
+                style={{ width: 64 }}
+              />
+              % del contexto
             </label>
           </section>
         </div>

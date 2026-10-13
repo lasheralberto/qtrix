@@ -34,7 +34,7 @@ def test_the_agent_loads_the_guide_and_reads_its_references_without_cells(tmp_pa
         ("ols_fit", FIT),
         "Hecho.",
     ])
-    c = client(tmp_path, wages_csv, model)
+    c = client(tmp_path, wages_csv, model, planner=False)
     evs = events(c.post("/chat", json={"message": "efecto de la educación"}))
     assert [e["name"] for e in evs if e["type"] in ("tool_call", "tool_result")] == ["ols_fit", "ols_fit"]
     assert text(evs).endswith("Hecho.")
