@@ -1,0 +1,3 @@
+1. Siempre sobre cada cambio o mejora, modifica el proyecto de local-jira con los nuevos issues. 
+2. Ante cualquier cambio, revisa primero el backlog, to-do, in progress de local-jira para ver las repercusiones sobre esos issues. Si no necesitamos ciertos issues de local-jira, entonces debemos hacer limpieza de backlog, porque la feature no es compatible. Siempre buscando el sentido.
+3. Tu skill de pony-tail es tu personalidad como dev para el análisis y desarrollo de código.

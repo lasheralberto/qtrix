@@ -1,0 +1,273 @@
+"""Plan-and-execute around the lead agent: a planner drafts the steps of a turn, the executor (the ReAct loop of the
+lead agent) works through them and keeps the plan up to date with the ``plan_*`` tools, and the session keeps the
+loop going until every step is settled and there is a final answer."""
+
+from __future__ import annotations
+
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field
+from pydantic_ai import Agent, FunctionToolset, ModelRetry, RunContext, Tool, ToolDefinition
+from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, ToolCallPart
+
+from ..tools.registry import all_tools
+
+PLANNER_INSTRUCTIONS = """\
+You are the planner of qtrix, a research workbench for applied econometrics. You do not run anything: you
+decide the steps that an executor agent with the tools listed below will follow to fulfil the user's LATEST
+message, and it adapts them as results come in.
+
+Rules:
+- Return no steps when the message needs no tools: greetings, thanks, or a question answerable from the
+  conversation so far. The executor then simply answers.
+- Otherwise 2 to 6 short, concrete steps in the user's language, each one verifiable action: name the dataset,
+  variables, estimator or test when you know them ("Estimar OLS de lwage sobre educ y exper con errores HC1").
+- Start by inspecting data only when the request depends on columns or structure not shown below.
+- Do not add a step for writing the final answer: the executor always ends with it.
+- When you plan steps, also state the goal in one sentence and, when there is a real choice of method, up to 3
+  alternatives you weighed, each as "approach: why chosen or discarded" in a few words. The user sees them in the
+  agent's workspace: keep them operational, no long deliberation.
+"""
+
+#: Steps the executor may settle; "pending" ones keep the loop going.
+Status = Literal["pending", "done", "skipped"]
+
+
+class PlanDraft(BaseModel):
+    """The planner's output."""
+
+    steps: list[str] = Field(default_factory=list, max_length=8,
+                             description="Ordered steps; empty when the message needs no tools.")
+    goal: str = Field("", description="What the turn must achieve, in one sentence (empty without steps).")
+    alternatives: list[str] = Field(default_factory=list, max_length=3,
+                                    description='Approaches weighed, each "approach: why chosen or discarded".')
+
+
+@dataclass
+class Step:
+    text: str
+    status: Status = "pending"
+    note: str = ""
+
+
+@dataclass
+class Plan:
+    steps: list[Step] = field(default_factory=list)
+
+    @classmethod
+    def of(cls, texts: Sequence[str]) -> Plan:
+        return cls([Step(t.strip()) for t in texts if t and t.strip()])
+
+    def pending(self) -> list[int]:
+        return [i for i, s in enumerate(self.steps, 1) if s.status == "pending"]
+
+    def render(self) -> str:
+        mark = {"pending": "[ ]", "done": "[x]", "skipped": "[-]"}
+        return "\n".join(f"{i}. {mark[s.status]} {s.text}" + (f" ({s.note})" if s.note else "")
+                         for i, s in enumerate(self.steps, 1))
+
+    def dump(self) -> list[dict[str, str]]:
+        return [{"text": s.text, "status": s.status, "note": s.note} for s in self.steps]
+
+
+#: Sections of the agent's workspace it can write to; plan, tasks and progress come from the plan and the cells.
+NoteSection = Literal["idea", "conclusion", "result"]
+
+
+@dataclass
+class Scratch:
+    """The agent's workspace in one turn (E8): the goal and alternatives of the plan, and the short notes the agent
+    writes as it works. Operational summaries only, shown to the user beside the analysis."""
+
+    goal: str = ""
+    notes: list[dict[str, str]] = field(default_factory=list)
+
+    @classmethod
+    def of(cls, draft: PlanDraft) -> Scratch:
+        if not draft.steps:
+            return cls()
+        ideas = [{"section": "idea", "text": a.strip()} for a in draft.alternatives if a.strip()]
+        return cls(draft.goal.strip(), ideas)
+
+    def add(self, section: str, text: str) -> None:
+        self.notes.append({"section": section, "text": text})
+
+    def dump(self) -> dict[str, Any]:
+        return {"goal": self.goal, "notes": list(self.notes)}
+
+    def __bool__(self) -> bool:
+        return bool(self.goal or self.notes)
+
+
+_plan: ContextVar[Plan | None] = ContextVar("qtrix_plan", default=None)
+_scratch: ContextVar[Scratch | None] = ContextVar("qtrix_scratch", default=None)
+_finalizing: ContextVar[bool] = ContextVar("qtrix_finalizing", default=False)
+
+PLAN_TOOLS = frozenset({"plan_update", "plan_revise"})
+SCRATCH_TOOLS = frozenset({"scratch_note"})
+#: Bookkeeping tools of the agent: never shown as Python cells.
+WORK_TOOLS = PLAN_TOOLS | SCRATCH_TOOLS
+NOTE_LIMIT = 400  # characters of one workspace note
+
+
+@contextmanager
+def active_plan(plan: Plan | None) -> Iterator[None]:
+    token = _plan.set(plan)
+    try:
+        yield
+    finally:
+        _plan.reset(token)
+
+
+@contextmanager
+def active_scratch(scratch: Scratch | None) -> Iterator[None]:
+    token = _scratch.set(scratch)
+    try:
+        yield
+    finally:
+        _scratch.reset(token)
+
+
+@contextmanager
+def finalizing() -> Iterator[None]:
+    """While active every tool refuses to run: the model must answer with what it already has."""
+    token = _finalizing.set(True)
+    try:
+        yield
+    finally:
+        _finalizing.reset(token)
+
+
+def check_tools_allowed() -> None:
+    if _finalizing.get():
+        raise ModelRetry("Tools are disabled now. Write your final answer to the user as text, from the results above.")
+
+
+def plan_update(step: int, status: Literal["done", "skipped"] = "done", note: str = "") -> str:
+    """Mark a step of the current plan as done or skipped, as soon as it is settled.
+
+    Args:
+        step: Number of the step (1-based).
+        status: "done" when finished, "skipped" when it turned out unnecessary or impossible.
+        note: Short outcome or reason, e.g. "eq01 estimated" or "no time series in the data".
+    """
+    check_tools_allowed()
+    plan = _plan.get()
+    if plan is None or not 1 <= step <= len(plan.steps):
+        raise ModelRetry(f"There is no step {step}. Current plan:\n{plan.render() if plan else '(none)'}")
+    plan.steps[step - 1].status, plan.steps[step - 1].note = status, note.strip()
+    left = plan.pending()
+    return plan.render() + ("\nNext: step " + str(left[0]) if left else "\nAll steps settled: give your final answer.")
+
+
+def plan_revise(steps: list[str]) -> str:
+    """Replace the pending steps of the plan when results show it must change (settled steps are kept).
+
+    Args:
+        steps: The new remaining steps, in order.
+    """
+    check_tools_allowed()
+    plan = _plan.get()
+    if plan is None:
+        raise ModelRetry("There is no plan in this turn.")
+    plan.steps = [s for s in plan.steps if s.status != "pending"] + Plan.of(steps).steps
+    return plan.render()
+
+
+def scratch_note(section: NoteSection, text: str) -> str:
+    """Write a short note in your workspace, the panel where the user follows your work beside the analysis.
+
+    Use it sparingly, only when it adds something the cells do not show: an "idea" when you weigh alternatives
+    before choosing (approach and why), a "conclusion" when a key result settles a question (provisional,
+    with the number behind it), a "result" for a deliverable the turn produced (an object, a table, a decision).
+    One or two sentences, in the user's language. Operational summaries only: never your internal deliberation.
+
+    Args:
+        section: "idea", "conclusion" or "result".
+        text: The note, one or two sentences.
+    """
+    check_tools_allowed()
+    scratch = _scratch.get()
+    text = " ".join(text.split())
+    if scratch is None:
+        raise ModelRetry("There is no workspace in this turn.")
+    if not text:
+        raise ModelRetry("The note is empty.")
+    if len(text) > NOTE_LIMIT:
+        raise ModelRetry(f"Too long ({len(text)} characters): summarise it in at most {NOTE_LIMIT}.")
+    scratch.add(section, text)
+    return "Noted."
+
+
+async def _when_scratching(ctx: RunContext[None], tool_def: ToolDefinition) -> ToolDefinition | None:
+    return tool_def if _scratch.get() is not None else None
+
+
+async def _when_planned(ctx: RunContext[None], tool_def: ToolDefinition) -> ToolDefinition | None:
+    return tool_def if _plan.get() is not None else None
+
+
+def plan_toolset() -> FunctionToolset:
+    tools = [Tool(fn, takes_ctx=False, docstring_format="google", prepare=_when_planned)
+             for fn in (plan_update, plan_revise)]
+    tools.append(Tool(scratch_note, takes_ctx=False, docstring_format="google", prepare=_when_scratching))
+    return FunctionToolset(tools, max_retries=3)
+
+
+def tool_catalog(namespaces: Sequence[str] | None = None) -> str:
+    lines = []
+    for spec in all_tools(namespaces=namespaces):
+        first = spec.description.splitlines()[0] if spec.description else ""
+        lines.append(f"- {spec.name}: {first}")
+    return "\n".join(lines)
+
+
+def build_planner(model: Any, *, namespaces: Sequence[str] | None = None) -> Agent[None, PlanDraft]:
+    return Agent(model, name="planner", output_type=PlanDraft, retries=2,
+                 instructions=PLANNER_INSTRUCTIONS + "\n## Executor tools\n" + tool_catalog(namespaces))
+
+
+def planner_prompt(message: str, workspace: str, transcript: Sequence[dict[str, Any]], *, turns: int = 3,
+                   limit: int = 600) -> str:
+    """What the planner sees: the workspace, the end of the conversation and the new message (not the raw model
+    history, which is long and full of tool calls the planner cannot make)."""
+    recent = []
+    for m in list(transcript)[-2 * turns:]:
+        text = (m.get("content") or "").strip()
+        if text:
+            recent.append(f"{m['role']}: " + (text if len(text) <= limit else text[:limit] + "…"))
+    return (workspace + "\n\n## Conversation so far\n" + ("\n".join(recent) or "(new conversation)")
+            + "\n\n## Latest message from the user\n" + message)
+
+
+def executor_prompt(message: str, plan: Plan) -> str:
+    if not plan.steps:
+        return message
+    return (message + "\n\n[Plan for this request. Work through it step by step with the tools; after each step call "
+            "plan_update (done or skipped, with a short note); if results show the plan is wrong, plan_revise it. "
+            "When every step is settled, write the final answer.]\n" + plan.render())
+
+
+def continue_prompt(plan: Plan) -> str:
+    return ("[Not finished: these plan steps are still pending. Continue with them now; mark a step skipped if it "
+            "is no longer needed. Then write the final answer.]\n" + plan.render())
+
+
+def final_prompt(message: str) -> str:
+    return ("[Write now your final answer to the user's request, in their language, from the results above. Do not "
+            "call tools. Report what was done, the key numbers and their interpretation, and anything left undone "
+            "and why.]\nRequest: " + message)
+
+
+def resumable(messages: list[ModelMessage]) -> list[ModelMessage]:
+    """A run cut short ends with tool calls nobody answered (or an empty request): drop them so the history can be
+    sent to the model again."""
+    out = list(messages)
+    while out and ((isinstance(out[-1], ModelRequest) and not out[-1].parts)
+                   or (isinstance(out[-1], ModelResponse) and any(isinstance(p, ToolCallPart) for p in out[-1].parts))):
+        out.pop()
+    return out

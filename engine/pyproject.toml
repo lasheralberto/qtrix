@@ -1,0 +1,78 @@
+[project]
+name = "qtrix-engine"
+version = "0.1.0"
+description = "qtrix engine: local-first agentic econometrics backend (FastAPI + PydanticAI + MCP)"
+authors = [
+    { name = "Alberto Martinez", email = "lasheralberto@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "a2a-sdk>=1.2.2",
+    "duckdb>=1.5.6",
+    "fastapi>=0.143.0",
+    "httpx>=0.28",
+    "huggingface-hub>=1.33",
+    "ipykernel>=6.29",
+    "jupyter-client>=8.6",
+    "keyring>=25.7.0",
+    "litellm>=1.83.0",
+    "mcp>=2.3.0",
+    "nbformat>=5.10",
+    "openpyxl>=3.1.5",
+    "pandas>=3.0.6",
+    "plotly>=7.1.0",
+    "pyarrow>=26.0.0",
+    "pydantic-ai-harness[skills]>=0.55.0",
+    "pydantic-ai-slim[anthropic,google,mcp,mistral,openai]>=2.55.0",
+    "python-multipart>=0.0.32",
+    "statsmodels>=0.15.0",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.optional-dependencies]
+panel = [
+    "linearmodels>=7.0",
+    "pyfixest>=0.60.0",
+]
+ts = [
+    "arch>=8.0.0",
+    "ruptures>=1.1.9",
+    "statsforecast>=2.0.0",
+]
+memory = [
+    "fastembed>=0.9.0",
+    "turbovec>=1.1.2",
+]
+
+[project.scripts]
+qtrix-engine = "qtrix_engine.__main__:main"
+qtrix-mcp = "qtrix_engine.mcp_server:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning", "ignore::FutureWarning"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["src/qtrix_engine/agents/SKILLS"]  # third-party skills, kept as installed
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "BLE"]
+ignore = ["B008"]
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = ["qtrix_engine", "qtrix"]  # qtrix: the public `import qtrix as qx` API (ADR 0002 §7.1)
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.17.0",
+]
