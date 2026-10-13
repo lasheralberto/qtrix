@@ -1,0 +1,11 @@
+{
+  "name": "qtrix",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Atajos de instalación y arranque (el código vive en engine/ y apps/desktop/)",
+  "scripts": {
+    "setup": "uv sync --directory engine --all-extras && npm --prefix apps/desktop install",
+    "start": "npm --prefix apps/desktop run dev",
+    "test": "uv run --directory engine pytest"
+  }
+}

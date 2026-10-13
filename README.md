@@ -1,74 +1,126 @@
 # qtrix
 
-**Local-first agentic workbench for econometrics.** Researchers chat with a team of AI econometricians that
-run real estimators (statsmodels, linearmodels, arch, …) on their own machine and build a live analysis
-panel — regression tables, specification tests, charts, notes — that keeps transforming as the
-conversation goes on. Data never leaves the computer.
+**Un equipo de econometristas con IA que trabaja en tu ordenador.**
 
-```
-apps/desktop   Electron + React UI (data rail · dynamic panel · agent chat)
-engine         Python engine: FastAPI sidecar, PydanticAI super-agent, qtrix-mcp tool registry,
-               DuckDB workspace, turbovec project memory
-docs           Library catalogue and architecture decisions
-```
+Le hablas en lenguaje natural ("estima un panel con efectos fijos y dime si hay heterocedasticidad") y qtrix
+ejecuta estimadores reales (statsmodels, linearmodels, arch…) y construye un panel vivo con tablas de
+regresión, contrastes, gráficos y notas. **Tus datos nunca salen de tu máquina** (a menos que elijas un modelo
+en la nube).
 
-## Run it (development)
+---
 
-Requirements: [uv](https://docs.astral.sh/uv/), Node 20+, optionally [Ollama](https://ollama.com) for local models.
+## Instalación en 3 pasos
 
-```bash
-cd engine && uv sync --all-extras          # Python 3.12 env with the econometrics stack
-cd ../apps/desktop && npm install
-node node_modules/electron/install.js      # only if npm skipped Electron's install script
-npm run dev                                # Vite + Electron; Electron spawns the engine
-```
+### 1. Instala los requisitos (una sola vez)
 
-Browser-only UI against a manually started engine:
+| Herramienta | Para qué | Descarga |
+|---|---|---|
+| **Node.js 20+** | Interfaz de escritorio | https://nodejs.org |
+| **uv** | Gestiona Python 3.12 y las librerías solas | https://docs.astral.sh/uv/getting-started/installation/ |
+| **Git** | Descargar el proyecto | https://git-scm.com |
+
+> No necesitas instalar Python: `uv` lo descarga automáticamente.
+
+Comprueba que están listos:
 
 ```bash
-cd engine && uv run python -m qtrix_engine --port 8765
-cd apps/desktop && npm run dev:web          # http://localhost:5173
+node --version    # v20 o superior
+uv --version
+git --version
 ```
 
-Configure the model in **Ajustes**: Ollama / LM Studio / any OpenAI-compatible local server, or Anthropic,
-OpenAI, Gemini, Mistral with your own key (stored in the OS keychain). "Solo modelos locales" blocks every
-remote provider.
+### 2. Descarga e instala qtrix
 
-### Local models without Ollama
+```bash
+git clone https://github.com/lasheralberto/qtrix.git
+cd qtrix
+npm run setup
+```
 
-**Modelos locales** (left rail) downloads GGUF models from Hugging Face — curated picks with tool calling,
-or any repo via search — and runs them with an embedded **llama.cpp** server that qtrix installs once
-(CPU, Vulkan or CUDA build). Downloads resume after interruptions and are verified with SHA-256.
+`npm run setup` instala todo: el motor Python con la pila econométrica y la app de escritorio. Tarda unos
+minutos la primera vez.
 
-### The qtrix folder
+### 3. Arranca
 
-Everything qtrix stores lives in one folder, `~/qtrix` by default (an existing `~/.qtrix` is migrated
-automatically). Change it in **Ajustes > Carpeta de qtrix**, moving the data or opening another folder.
+```bash
+npm start
+```
+
+Se abre la ventana de qtrix. Listo.
+
+---
+
+## Primeros pasos dentro de la app
+
+1. **Elige un modelo** en **Ajustes**. Tienes dos caminos:
+   - **100 % local y gratis:** abre **Modelos locales** (barra izquierda), descarga uno de los modelos
+     recomendados y qtrix lo ejecuta solo. También funciona con [Ollama](https://ollama.com) o LM Studio.
+   - **En la nube:** pega tu clave de Anthropic, OpenAI, Gemini o Mistral (se guarda en el llavero del sistema).
+     Activa **Solo modelos locales** si quieres bloquear cualquier proveedor remoto.
+2. **Carga tus datos** arrastrando un CSV o Excel a la barra de datos.
+3. **Pregunta en el chat**, por ejemplo: *"Haz una regresión de salario sobre educación y experiencia con
+   errores robustos"*.
+4. Mira cómo el panel central se llena de tablas, gráficos y notas. Sigue conversando y se transforma.
+
+---
+
+## ¿Algo no funciona?
+
+| Síntoma | Solución |
+|---|---|
+| `uv: command not found` | Reinicia la terminal tras instalar uv, o revisa el paso 1. |
+| La ventana de Electron no abre | Ejecuta `node apps/desktop/node_modules/electron/install.js` y vuelve a `npm start`. |
+| Error desde la terminal de VS Code | Usa `npm start` (ya limpia la variable `ELECTRON_RUN_AS_NODE` que rompe Electron). |
+| El agente no responde | Revisa que hay un modelo configurado en **Ajustes** y mira `~/qtrix/logs/engine.log`. |
+
+---
+
+## Dónde guarda qtrix tus cosas
+
+Todo vive en una única carpeta, `~/qtrix` por defecto (cámbiala en **Ajustes > Carpeta de qtrix**):
 
 ```
 qtrix/
-  settings.json  data/ (DuckDB)  memory/ (turbovec)  models/ (GGUF)  runtime/ (llama.cpp)
-  logs/ (engine.log, llama-server.log)  uploads/  exports/  LEEME.txt
+  settings.json   data/ (DuckDB)   memory/   models/ (GGUF)   runtime/ (llama.cpp)
+  logs/           uploads/         exports/  LEEME.txt
 ```
 
-The location is remembered in `%APPDATA%\qtrix\location.json` (macOS `~/Library/Application Support/qtrix`,
-Linux `~/.config/qtrix`); `QTRIX_HOME` overrides it for scripts and tests.
+---
 
-## Use the tools from any MCP client
+## Para desarrolladores
 
-```bash
-cd engine && uv run qtrix-mcp --workspace path/to/workspace.duckdb
+```
+apps/desktop   Electron + React (barra de datos · panel dinámico · chat con agentes)
+engine         Motor Python: FastAPI, agente PydanticAI, registro de herramientas MCP,
+               DuckDB, memoria de proyecto con turbovec
+docs           Catálogo de librerías y decisiones de arquitectura (ADR)
 ```
 
-Exposes the same registry the agents use (`data_*`, `ols_*`, `panel_*`, `iv_*`, `ts_*`, `viz_*`, `ui_*`,
-`memory_*`). The running app also accepts `POST /tools/{name}` for direct, LLM-free calls.
-
-## Tests
+**Solo la interfaz en el navegador** (con el motor lanzado a mano):
 
 ```bash
-cd engine && uv run pytest && uv run ruff check src tests
+cd engine && uv run python -m qtrix_engine --port 8765
+cd apps/desktop && npm run dev:web        # http://localhost:5173
+```
+
+**Usar las herramientas desde cualquier cliente MCP** (Claude Desktop, etc.):
+
+```bash
+cd engine && uv run qtrix-mcp --workspace ruta/al/workspace.duckdb
+```
+
+Expone el mismo registro que usan los agentes (`data_*`, `ols_*`, `panel_*`, `iv_*`, `ts_*`, `viz_*`, `ui_*`,
+`memory_*`). La app en marcha también acepta `POST /tools/{nombre}` para llamadas directas sin LLM.
+
+**Tests:**
+
+```bash
+npm test                                           # motor (pytest)
+cd engine && uv run ruff check src tests           # lint
 cd apps/desktop && npm run typecheck && npm run build
 ```
 
-Estimates are checked against statsmodels/linearmodels directly (coefficients and standard errors to 1e-10),
-and the chat → tool → panel loop is tested with a scripted model.
+Las estimaciones se validan contra statsmodels/linearmodels (coeficientes y errores estándar a 1e-10) y el
+bucle chat → herramienta → panel se prueba con un modelo simulado.
+
+**Empaquetar un instalador** (`.exe`, `.dmg`, `.AppImage`): `cd apps/desktop && npm run dist`.
