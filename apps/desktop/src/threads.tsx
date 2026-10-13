@@ -4,8 +4,7 @@ import { useEffect, useState } from "react";
 import type { Thread } from "./api";
 import { EditableTitle, type MenuAt, RowMenu, ago, menuAt } from "./notebooks";
 
-const meta = (t: Thread) =>
-  [t.n_turns ? `${t.n_turns} ${t.n_turns === 1 ? "pregunta" : "preguntas"}` : "vacía", ago(t.updated_at)].join(" · ");
+const meta = (t: Thread) => ago(t.updated_at);
 
 export function ThreadList(props: {
   threads: Thread[];
@@ -40,7 +39,9 @@ export function ThreadList(props: {
   return (
     <div className="notebooks threads">
       <div className="side-title">
-        <span>Conversaciones</span>
+        <span>
+          Conversaciones <span className="count">{props.threads.length}</span>
+        </span>
         <button
           className="ghost"
           title={props.locked ? "Espera a que termine el turno en curso" : "Nueva conversación (mismos datos)"}

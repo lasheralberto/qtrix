@@ -126,7 +126,9 @@ export function NotebookList(props: {
   return (
     <div className="notebooks">
       <div className="side-title">
-        <span>Cuadernos</span>
+        <span>
+          Cuadernos <span className="count">{props.notebooks.length}</span>
+        </span>
         <button className="ghost" title="Nuevo cuaderno" aria-label="Nuevo cuaderno" onClick={props.onCreate}>
           <Plus size={15} />
         </button>

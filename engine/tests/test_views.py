@@ -66,8 +66,8 @@ def test_views_and_procs_follow_type_and_method(ctx, wages, macro):
     run("ols_compare", result_ids=["eq_ls", "eq_logit"], name="tab_cmp")
     names = {n: {v["name"] for v in run("obj_views", name=n)["views"]} for n in
              ("eq_ls", "eq_logit", "var_m", "eq_ar", "tab_cmp")}
-    assert names == {"eq_ls": {"estimation", "coefplot", "residuals", "diagnostics"},
-                     "eq_logit": {"estimation", "coefplot", "residuals"},
+    assert names == {"eq_ls": {"estimation", "coefplot", "residuals", "diagnostics", "margins", "sensitivity"},
+                     "eq_logit": {"estimation", "coefplot", "residuals", "margins"},
                      "var_m": {"estimation", "irf"}, "eq_ar": {"estimation", "coefplot", "residuals", "forecast"},
                      "tab_cmp": {"table"}}
     listing = run("obj_views", name="eq_ls")
@@ -123,7 +123,7 @@ def test_http_views_and_freeze(tmp_path, wages_csv):
     c.post("/datasets/import", json={"path": str(wages_csv)})
     c.post("/tools/ols_fit", json={"dataset_id": "wages", "formula": "lwage ~ educ", "name": "eq01"})
     listing = c.get("/objects/eq01/views").json()
-    assert listing["default_view"] == "estimation" and len(listing["views"]) == 4
+    assert listing["default_view"] == "estimation" and len(listing["views"]) == 6  # + margins, sensitivity
     qq = c.get("/objects/eq01/views/residuals", params={"params": '{"kind": "qq"}'}).json()
     assert qq["kind"] == "plotly_figure" and qq["ref"]["params"] == {"kind": "qq"} and qq["version"] == 1
     assert c.get("/objects/eq01/views/nope").status_code == 400

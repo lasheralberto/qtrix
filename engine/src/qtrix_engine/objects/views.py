@@ -350,6 +350,126 @@ def garch_volatility(obj: StoredObject) -> ViewResult:
     return out
 
 
+@view("equation", "effects", title="Event-study graph", methods=("event_study",), requires=("plotly",))
+def event_study_effects(obj: StoredObject) -> ViewResult:
+    out = _figure_view(obj, "figure", "title")
+    out.llm = {k: obj.summary.get(k) for k in ("post_average", "pretrend_test")}
+    return out
+
+
+@view("equation", "rd_plot", title="RD plot", methods=("rdd",), requires=("plotly",))
+def rdd_plot(obj: StoredObject) -> ViewResult:
+    out = _figure_view(obj, "figure", "title")
+    out.llm = {k: obj.summary.get(k) for k in ("cutoff", "bandwidth_h", "n_effective")}
+    return out
+
+
+@view("equation", "synth_path", title="Treated vs synthetic", methods=("synth",), requires=("plotly",))
+def synth_path(obj: StoredObject) -> ViewResult:
+    out = _figure_view(obj, "figure", "title")
+    out.llm = {k: obj.summary.get(k) for k in ("att", "pre_rmspe", "placebo")}
+    return out
+
+
+@view("equation", "heterogeneity", title="Effect heterogeneity", methods=("cate",), requires=("plotly",))
+def cate_heterogeneity(obj: StoredObject) -> ViewResult:
+    out = _figure_view(obj, "figure", "title")
+    out.llm = {k: obj.summary.get(k) for k in ("cate_quantiles", "feature_importance", "cate_by_top_feature")}
+    return out
+
+
+@view("equation", "sensitivity", title="Sensitivity to omitted variables", group="Coefficient Diagnostics",
+      methods=("ls", "wls"), check=True, requires=("statsmodels",))
+def eq_sensitivity(obj: StoredObject, treatment: str | None = None, benchmarks: list[str] | None = None,
+                   kd: list[float] | None = None, q: float = 1.0, alpha: float = 0.05) -> ViewResult:
+    """Cinelli-Hazlett robustness values and benchmark bounds for the coefficient of ``treatment`` (default: the
+    first regressor)."""
+    from .causal import sensitivity
+
+    res = get_context().objects.fitted(obj.name)
+    if treatment is None:
+        treatment = next((n for n in res.model.exog_names if n.lower() not in {"intercept", "const"}), "")
+    s = sensitivity(res, treatment, benchmarks or [], kd or [1.0, 2.0, 3.0], q, alpha)
+    lines = [f"**{treatment}**: estimate {s['estimate']:.4g} (t = {s['t']:.2f}, df = {s['dof']:.0f})", "",
+             "| Statistic | Value |", "|---|---|",
+             f"| Partial R² of {treatment} with the outcome | {s['partial_r2_treatment']:.2%} |",
+             f"| Robustness value RV (q = {q:g}) | {s['rv_q']:.2%} |",
+             f"| Robustness value RV (q = {q:g}, α = {alpha:g}) | {s['rv_qa']:.2%} |",
+             "", f"A confounder explaining {s['rv_q']:.1%} of the residual variance of both {treatment} and the "
+             f"outcome would remove {q:.0%} of the estimate; one explaining {s['rv_qa']:.1%} would make it "
+             f"insignificant at {alpha:.0%}."]
+    if s["bounds"]:
+        lines += ["", "| Confounder as strong as | R²(D~Z|X) | R²(Y~Z|D,X) | Adjusted estimate | Adjusted t | CI |",
+                  "|---|---|---|---|---|---|"]
+        def num(v: Any, spec: str) -> str:  # a bound with R²(Y~Z|D,X) = 1 has no standard error
+            return "—" if v is None else format(v, spec)
+
+        lines += [f"| {b['k']:g}× {b['benchmark']} | {b['r2dz_x']:.2%} | {b['r2yz_dx']:.2%} | "
+                  f"{num(b['adjusted_estimate'], '.4g')} | {num(b['adjusted_t'], '.2f')} | "
+                  f"[{num(b['ci_low'], '.3g')}, {num(b['ci_high'], '.3g')}] |" for b in s["bounds"]]
+    if s["bounds_undefined"]:
+        lines += ["", "Not defined (such a confounder would explain all the residual variance of the treatment): "
+                  + ", ".join(f"{b['k']:g}× {b['benchmark']}" for b in s["bounds_undefined"]) + "."]
+    fragile = s["rv_qa"] < 0.05 or any(b["ci_low"] is not None and b["ci_low"] <= 0 <= b["ci_high"]
+                                       for b in s["bounds"])
+    code = (f"# Cinelli & Hazlett (2020), as sensemakr: robustness values of {treatment}\n"
+            f"from qtrix_engine.objects.causal import sensitivity\nsensitivity(res, {treatment!r}, {benchmarks!r}, "
+            f"{kd or [1.0, 2.0, 3.0]!r})")
+    return ViewResult("markdown", f"{obj.name} · sensitivity of {treatment}", {"markdown": "\n".join(lines)}, s,
+                      "warn" if fragile else "ok", code)
+
+
+def _margins_frame(res: Any, kind: str, by: str | None, variables: list[str] | None) -> Any:
+    import copy
+
+    import marginaleffects as me
+    import pandas as pd
+
+    # marginaleffects refuses string columns: hand it a copy of the model whose data has them as categories.
+    frame = res.model.data.frame.copy()
+    for c in frame.columns:
+        if frame[c].dtype == object or pd.api.types.is_string_dtype(frame[c]):
+            frame[c] = frame[c].astype("category")
+    model = copy.copy(res.model)
+    model.data = copy.copy(res.model.data)
+    model.data.frame = frame
+    fitted = copy.copy(res)
+    fitted.model = model
+    fn = {"slopes": me.avg_slopes, "comparisons": me.avg_comparisons, "predictions": me.avg_predictions}[kind]
+    kwargs: dict[str, Any] = {}
+    if by:
+        kwargs["by"] = by
+    if variables and kind != "predictions":
+        kwargs["variables"] = variables
+    out = fn(fitted, **kwargs)
+    table = out.to_pandas() if hasattr(out, "to_pandas") else pd.DataFrame(out)
+    keep = [c for c in (by, "term", "contrast", "estimate", "std_error", "statistic", "p_value", "conf_low",
+                        "conf_high") if c and c in table.columns]
+    return table[keep]
+
+
+@view("equation", "margins", title="Marginal effects", group="Coefficient Diagnostics",
+      methods=("ls", "wls", "binary", "glm"), requires=("marginaleffects",))
+def eq_margins(obj: StoredObject, kind: Literal["slopes", "comparisons", "predictions"] = "slopes",
+               by: str | None = None, variables: list[str] | None = None) -> ViewResult:
+    """Average marginal effects (slopes), contrasts or predictions, optionally by group (marginaleffects)."""
+    from ..tools._format import df_block_data
+
+    table = _margins_frame(get_context().objects.fitted(obj.name), kind, by, variables)
+    term_names = obj.summary.get("term_names") or {}
+    if "term" in table.columns and term_names:
+        from .. import expr
+
+        table["term"] = [expr.pretty(str(t), term_names) for t in table["term"]]
+    label = {"slopes": "average marginal effects", "comparisons": "average contrasts",
+             "predictions": "average predictions"}[kind] + (f" by {by}" if by else "")
+    rows = clean(table.to_dict(orient="records"))
+    code = (f"import marginaleffects as me\nme.avg_{kind}(res" + (f", by={by!r}" if by else "")
+            + (f", variables={variables!r}" if variables and kind != "predictions" else "") + ")")
+    return ViewResult("dataframe", f"{obj.name} · {label}", df_block_data(table.round(6)), {"margins": rows[:40]},
+                      code=code)
+
+
 @view("equation", "regimes", title="Regime probabilities", methods=("markov",), requires=("plotly",))
 def markov_regimes(obj: StoredObject) -> ViewResult:
     out = _figure_view(obj, "figure", "title")

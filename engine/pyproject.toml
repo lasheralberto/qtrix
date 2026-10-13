@@ -43,6 +43,16 @@ memory = [
     "fastembed>=0.9.0",
     "turbovec>=1.1.2",
 ]
+causal = [
+    "csdid>=0.4.2",
+    "doubleml>=0.11.4",
+    "econml>=0.17.0",
+    "marginaleffects>=0.6.1",
+    "polars>=1.26,<2",
+    "pysyncon>=1.7.0",
+    "rddensity>=3.0",
+    "rdrobust>=2.1.1",
+]
 
 [project.scripts]
 qtrix-engine = "qtrix_engine.__main__:main"

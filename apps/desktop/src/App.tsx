@@ -407,7 +407,7 @@ export default function App() {
     <div className={`app ${wsOpen ? "ws-open" : ""} ${railOpen ? "rail-open" : ""}`}>
       <aside className={`rail ${railOpen ? "open" : ""}`} aria-hidden={!railOpen} inert={!railOpen} aria-label="Cuadernos y datos">
         <div className="brand">
-          <span className="logo">q</span>
+          <img className="logo" src="./brand/qtrix-mark.png" alt="qtrix" />
           <div>
             <strong>qtrix</strong>
             <span className="muted small">econometría agéntica local</span>
@@ -510,9 +510,7 @@ export default function App() {
         >
           {blocks.length === 0 && turns.length === 0 && (
             <div className="panel-empty">
-              <span className="empty-mark">
-                <Sparkles size={22} />
-              </span>
+              <img className="empty-logo" src="./brand/qtrix-logo.png" alt="qtrix" />
               <h2>{threads.length > 1 ? "Una conversación nueva sobre los mismos datos" : "El cuaderno se construye mientras conversas"}</h2>
               <p>
                 Importa un dataset a la izquierda y pregunta abajo en lenguaje natural. El agente elegirá estimadores, ejecutará los
@@ -533,6 +531,8 @@ export default function App() {
         </div>
         <Composer
           ref={composer}
+          methods={methods}
+          datasets={datasets}
           busy={busy}
           onSend={ask}
           onStop={stop}

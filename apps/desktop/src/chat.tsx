@@ -16,6 +16,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -28,9 +29,19 @@ import {
   type ChatEvent,
   type ChatTurn,
   type ContextUsage,
+  type Dataset,
+  type MethodArea,
   type PlanStep,
   type Scratch,
 } from "./api";
+import {
+  SuggestionList,
+  suggest,
+  useActiveIndex,
+  useSuggestionSource,
+  wordBefore,
+  type Suggestion,
+} from "./suggest";
 import { Markdown } from "./blocks";
 import { describeAction, words } from "./actions";
 import { CodeCell, TurnCode } from "./cells";
@@ -499,10 +510,34 @@ export const Composer = forwardRef<
     modelPicker: ReactNode;
     /** The context meter, shown next to the model picker. */
     meter?: ReactNode;
+    /** What the autocomplete suggests while typing: the methods of the catalog and the variables of the datasets. */
+    methods: MethodArea[] | null;
+    datasets: Dataset[];
   }
->(function Composer({ busy, onSend, onStop, onReset, modelPicker, meter }, ref) {
+>(function Composer({ busy, onSend, onStop, onReset, modelPicker, meter, methods, datasets }, ref) {
   const [input, setInput] = useState("");
+  // Where the cursor is (null while a range is selected).
+  const [caret, setCaret] = useState<number | null>(0);
+  // Escape hides the list until the text changes again.
+  const [dismissed, setDismissed] = useState(false);
   const area = useRef<HTMLTextAreaElement>(null);
+  const source = useSuggestionSource(methods, datasets);
+  const typing = dismissed || caret === null ? null : wordBefore(input, caret);
+  const items = useMemo(() => (typing ? suggest(source, typing.word) : []), [source, typing?.word]);
+  const [active, setActive] = useActiveIndex(items);
+  const open = !!typing && items.length > 0;
+
+  const accept = (s: Suggestion) => {
+    if (!typing || caret === null) return;
+    const next = input.slice(0, typing.start) + s.text + input.slice(caret);
+    const at = typing.start + s.text.length;
+    setInput(next);
+    setCaret(at);
+    requestAnimationFrame(() => {
+      area.current?.focus();
+      area.current?.setSelectionRange(at, at);
+    });
+  };
 
   useImperativeHandle(ref, () => ({
     focus(prefill) {
@@ -543,12 +578,55 @@ export const Composer = forwardRef<
         submit();
       }}
     >
+      {open && (
+        <SuggestionList
+          id="composer-suggest"
+          items={items}
+          word={typing.word}
+          active={active}
+          onHover={setActive}
+          onPick={accept}
+        />
+      )}
       <textarea
         ref={area}
         value={input}
         placeholder="Pregunta al equipo econométrico… Ej.: estima un modelo de efectos fijos de lwage sobre exper y union"
-        onChange={(e) => setInput(e.target.value)}
+        role="combobox"
+        aria-expanded={open}
+        aria-controls="composer-suggest"
+        aria-autocomplete="list"
+        aria-activedescendant={open ? `composer-suggest-${active}` : undefined}
+        onChange={(e) => {
+          setInput(e.target.value);
+          setCaret(e.target.selectionStart);
+          setDismissed(false);
+        }}
+        onSelect={(e) => {
+          const { selectionStart: from, selectionEnd: to } = e.currentTarget;
+          setCaret(from === to ? from : null);
+        }}
+        onBlur={() => setDismissed(true)}
+        onFocus={() => setDismissed(false)}
         onKeyDown={(e) => {
+          if (open) {
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+              e.preventDefault();
+              const step = e.key === "ArrowDown" ? 1 : items.length - 1;
+              setActive((i) => (i + step) % items.length);
+              return;
+            }
+            if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+              e.preventDefault();
+              accept(items[active]);
+              return;
+            }
+            if (e.key === "Escape") {
+              e.preventDefault();
+              setDismissed(true);
+              return;
+            }
+          }
           if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
             submit();

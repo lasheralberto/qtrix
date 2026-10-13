@@ -219,7 +219,9 @@ export function DatasetList(props: {
       }}
     >
       <div className="side-title">
-        <span>Datos del cuaderno</span>
+        <span>
+          Datos <span className="count">{props.datasets.length}</span>
+        </span>
         <button
           className="ghost"
           title="Importar CSV, Parquet o Excel"
@@ -235,17 +237,18 @@ export function DatasetList(props: {
       <ul>
         {props.datasets.map((d) => (
           <li key={d.id}>
-            <button className="dataset" onClick={() => props.onOpen(d)}>
+            <button className="dataset" title={d.structure} onClick={() => props.onOpen(d)}>
               <Database size={14} />
               <span className="ds-name">{d.name}</span>
-              <span className="ds-meta">
+              {d.suggestion && (
+                <span className="ds-suggest" title={`¿${KIND_LABEL[d.suggestion.kind].toLowerCase()}?`}>
+                  ¿?
+                </span>
+              )}
+              <span className="ds-meta" title={structureLabel(d)}>
                 {d.n_rows.toLocaleString("es-ES")} × {d.columns.length}
               </span>
             </button>
-            <span className={`ds-panel ${d.kind}`} title={d.structure}>
-              {structureLabel(d)}
-              {d.suggestion && <span className="ds-suggest"> · ¿{KIND_LABEL[d.suggestion.kind].toLowerCase()}?</span>}
-            </span>
           </li>
         ))}
       </ul>

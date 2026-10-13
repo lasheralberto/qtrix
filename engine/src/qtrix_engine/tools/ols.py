@@ -17,7 +17,7 @@ from ..objects.specs import (
     WlsSpec,
 )
 from ..objects.views import show
-from ._format import llm_view
+from ._format import clean, llm_view
 from .registry import Qx, tool
 
 CovType = Literal["nonrobust", "HC0", "HC1", "HC2", "HC3", "cluster", "HAC"]
@@ -196,6 +196,28 @@ def ols_diagnostics(result_id: str) -> dict[str, Any]:
     (the equation's "diagnostics" view: it refreshes when the equation is re-estimated)."""
     block = show(result_id, "diagnostics")
     return {"block_id": block.id, **block.data}
+
+
+@tool("ols", requires=("marginaleffects",), qx=Qx("obj", "margins"))
+def ols_margins(result_id: str, kind: Literal["slopes", "comparisons", "predictions"] = "slopes",
+                by: str | None = None, variables: list[str] | None = None) -> dict[str, Any]:
+    """Average marginal effects, contrasts or predictions of a fitted OLS, WLS, logit/probit or GLM equation
+    (marginaleffects). The way to read a logit/probit on the probability scale and models with interactions or
+    polynomials: the effect of x averaged over the sample, or `by` group (e.g. the effect of education for men
+    and for women when the model has educ × female). The table goes to the panel.
+
+    Args:
+        result_id: A fitted equation (ols_fit or ols_binary).
+        kind: slopes (dY/dX, and contrasts for categorical regressors), comparisons (contrasts) or predictions
+            (average predicted outcome, e.g. predicted probability by group).
+        by: Column to compute the averages within each of its groups.
+        variables: Regressors to report (slopes/comparisons); omit for all.
+    """
+    from ..objects.views import compute
+
+    params = {"kind": kind, "by": by, "variables": variables}
+    result, _ = compute(result_id, "margins", params)
+    return clean({"block_id": show(result_id, "margins", params).id, **(result.llm or {})})
 
 
 @tool("ols", requires=("statsmodels",), mutating=True,

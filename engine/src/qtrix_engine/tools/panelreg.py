@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from ..context import get_context
-from ..objects.specs import GmmSpec, LimlSpec, PanelSpec, TslsSpec
+from ..objects.specs import EventStudySpec, GmmSpec, LimlSpec, PanelSpec, TslsSpec
+from ..objects.views import show
 from ._format import clean
-from .ols import publish_object, resolved_sample
+from .ols import publish, publish_object, resolved_sample
 from .registry import Qx, tool
 
 PanelEstimator = Literal["fe", "twfe", "re", "between", "fd", "pooled"]
@@ -42,6 +43,47 @@ def panel_fit(dataset_id: str, formula: str, estimator: PanelEstimator = "fe",
     label = {"fe": "Panel FE", "twfe": "Panel TWFE", "re": "Random effects", "between": "Between",
              "fd": "First differences", "pooled": "Pooled OLS"}[estimator]
     return publish_object(spec, name, title=f"{label}: {formula}")
+
+
+@tool("panel", requires=("pyfixest",), kinds=PANEL, mutating=True,
+      qx=Qx("qx", "equation", ("name",), family="equation"))
+def panel_event_study(dataset_id: str, outcome: str, cohort: str,
+                      estimator: Literal["did2s", "cs", "saturated", "lpdid", "twfe"] = "did2s", pre: int = 4,
+                      post: int = 4, cluster: str | None = None,
+                      control_group: Literal["never", "notyet"] = "never", sample: str | None = None,
+                      name: str | None = None) -> dict[str, Any]:
+    """Event study / difference-in-differences with staggered adoption: the effect in each period before and
+    after treatment, relative to the period just before (t-1), plus the overall ATT and a joint pre-trends test.
+
+    With staggered timing and effects that change over time, plain TWFE compares late adopters with early ones
+    already treated and is biased (Goodman-Bacon 2021): the default did2s (Gardner two-stage imputation),
+    Callaway-Sant'Anna (cs: doubly robust group-time ATTs, never- or not-yet-treated controls), the Sun-Abraham
+    saturated estimator and local-projections DiD are robust to it; twfe is kept as a benchmark. Comparing two of
+    them is a good robustness check.
+    Needs a declared panel. Periods outside [-pre, post] are binned into the endpoints. The event-study chart
+    goes to the panel. Stored as a named equation object; `name` re-estimates an existing one as a new version.
+
+    Args:
+        dataset_id: Dataset id or name (a panel).
+        outcome: Outcome column.
+        cohort: Column with each entity's first treated period, in the units of the time column (e.g. 2006 on
+            a yearly panel); 0, missing or after the last period = never treated.
+        estimator: did2s, cs (Callaway-Sant'Anna, needs the causal extra), saturated (Sun-Abraham), lpdid or twfe.
+        pre: Leads shown (at least 2; t-1 is the reference).
+        post: Lags shown (0 = the treatment period).
+        cluster: Cluster column for the standard errors; defaults to the panel entity.
+        control_group: cs only: never (never-treated entities) or notyet (also those not yet treated).
+        sample: Sample for this call only; omit for the dataset's active sample.
+        name: Object name (e.g. eq_es). An existing name is re-estimated as a new version.
+    """
+    spec = EventStudySpec(page=get_context().workspace.get(dataset_id).name, sample=resolved_sample(dataset_id, sample),
+                          outcome=outcome, cohort=cohort, estimator=estimator, pre=pre, post=post, cluster=cluster,
+                          control_group=control_group)
+    obj, out = publish(spec, name, title=f"Event study · {outcome}")
+    show(obj.name, "effects")
+    for key in ("post_average", "pretrend_test", "treated_entities", "cohorts"):
+        out[key] = obj.summary.get(key)
+    return clean(out)
 
 
 @tool("panel", requires=("linearmodels",), kinds=PANEL,

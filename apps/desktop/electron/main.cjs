@@ -153,6 +153,7 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 700,
     title: "qtrix",
+    icon: path.join(__dirname, "icon.ico"),
     backgroundColor: "#f6f5f1",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -229,6 +230,7 @@ app.on("second-instance", () => {
   mainWindow.focus();
 });
 
+app.setAppUserModelId("dev.qtrix.desktop");
 (gotLock ? app.whenReady() : Promise.resolve()).then(async () => {
   if (!gotLock) return;
   try {

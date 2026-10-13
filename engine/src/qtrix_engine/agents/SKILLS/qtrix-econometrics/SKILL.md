@@ -1,6 +1,6 @@
 ---
 name: qtrix-econometrics
-description: "Causal inference and applied econometric design in qtrix: pinning down the estimand and the identification strategy, picking the estimator, running it with the qtrix tools or, for what they lack (propensity scores, PSM/IPW, DID event studies, RDD), with the bundled causal library in a Python cell, then diagnostics, robustness and interpretation. Read it for treatment effects (ATE/ATT/LATE/ITT), policy evaluation, IV design, DID, RDD, falsification tests, heterogeneity or a research-design memo."
+description: "Causal inference and applied econometric design in qtrix: pinning down the estimand and the identification strategy, picking the estimator, running it with the qtrix tools (IV, DiD and staggered event studies, RDD, synthetic control, double ML) or, for what they lack (propensity scores, PSM/IPW), with the bundled causal library in a Python cell, then diagnostics, robustness and interpretation. Read it for treatment effects (ATE/ATT/LATE/ITT), policy evaluation, IV design, DID, RDD, falsification tests, heterogeneity or a research-design memo."
 ---
 
 # Econometrics in qtrix
@@ -31,11 +31,14 @@ or out.
 | Identifying variation | Use | Notes |
 |---|---|---|
 | Randomised / as-if random | `ols_fit` (HC1, or `cov_type="cluster"` + `cluster`) | Binary Y: also `ols_binary` (logit/probit) as a check |
-| Selection on observables | Library: `propensity_score_construction`, overlap plot, `propensity_score_matching`, `propensity_score_inverse_probability_weighting`; `ols_fit` with the controls as baseline | Always plot the overlap first |
+| Selection on observables, few controls | Library: `propensity_score_construction`, overlap plot, `propensity_score_matching`, `propensity_score_inverse_probability_weighting`; `ols_fit` with the controls as baseline | Always plot the overlap first |
+| Selection on observables, many controls / nonlinear confounding | `causal_dml` (`model="plr"` any treatment, `"irm"` ATE of a 0/1 treatment); `causal_pds` (post-double-selection lasso) when the question is which of many controls to include | Same identifying assumption as PS: no unobserved confounders. Compare learners (forest vs lasso) as robustness |
+| Who benefits more (heterogeneous effects) | `causal_forest` (CATE distribution, feature importance, effect by tercile of the main modifier) | Report the ATE with its CI first; heterogeneity is exploratory unless pre-specified |
 | Instrument Z | `iv_fit` (2SLS/LIML/GMM, correct SEs, first-stage diagnostics) | Never the library's `IV_2SLS_regression`: its SEs are biased down. `IV_2SLS_IV_setting_test` is fine as an extra reduced-form/falsification check |
-| Policy timing in a panel, one adoption date | `panel_fit` with `estimator="twfe"` and a `treated:post` (or `D`) regressor, `cov_type="cluster_entity"` | Library `Static_Diff_in_Diff_regression` is equivalent |
-| Staggered adoption / dynamics | Library `Staggered_Diff_in_Diff_Event_Study_regression` + `..._visualization` for pre-trends | TWFE with staggered timing and heterogeneous effects is biased (Goodman-Bacon 2021): say so, report the event study |
-| Cutoff in a running variable | Library `Sharp_Regression_Discontinuity_Design_regression` / `Fuzzy_Regression_Discontinuity_Design_regression` | At least two bandwidths; fuzzy: keep `target_type="summary"` |
+| Policy timing in a panel, one adoption date | `panel_fit` with `estimator="twfe"` and a `treated:post` (or `D`) regressor, `cov_type="cluster_entity"`; `panel_event_study` for the dynamics and pre-trends | Library `Static_Diff_in_Diff_regression` is equivalent |
+| Staggered adoption / dynamics | `panel_event_study` with a first-treated-period column (`estimator="did2s"` default; `cs` = Callaway-Sant'Anna with `control_group="never"/"notyet"`, `saturated` = Sun-Abraham, `lpdid`; `twfe` only as a benchmark) | TWFE with staggered timing and heterogeneous effects is biased (Goodman-Bacon 2021): say so. Report the event-study chart and the joint pre-trends test |
+| One treated unit (region, country), many untreated | `causal_synth` (donor weights, gap, in-space placebo p-value) | Check the pre-treatment fit (pre RMSPE) before reading the gap; drop donors hit by the same shock |
+| Cutoff in a running variable | `causal_rdd` (rdrobust: optimal bandwidth, robust bias-corrected CI; `treatment=` for fuzzy) | First `causal_rd_density` (manipulation test); report the Robust row; rerun with `h` at half and double the bandwidth; check covariates do not jump (`causal_rdd` with a covariate as outcome) |
 | Dynamics of macro series | `ts_*`, `vol_garch` | Outside causal identification: no treatment effect claims |
 
 Keep the specification in the qtrix tools whenever they can express it: a formula with `C(...)`, interactions, a
@@ -98,14 +101,22 @@ snippets import `econometric_algorithm` directly; in qtrix import it from `qtrix
 - IPW-RA takes the square root of the IPW weights: non-standard, label it as such.
 - The event study assigns leads and lags from the row position: the panel must be balanced, sorted by time and
   without gaps. Check with data_describe_structure; restrict the sample to a balanced panel if needed.
-- No synthetic control, triple differences, quantile treatment effects or DML / causal forests. Say so and, if
-  the user wants it, write it from statsmodels / linearmodels / scikit-learn in a cell.
+- The library's event study and RDD are superseded by `panel_event_study` and `causal_rdd`; use them only when
+  the user asks for that exact code.
+- Not available as tools: triple differences and quantile treatment effects. Say so and, if the user wants it,
+  write it in a cell (scikit-learn, DoubleML, EconML and pyfixest are installed with the `causal` and `panel`
+  extras).
 
 ## 5. Diagnostics, robustness, interpretation
 
 Before presenting an estimate as causal run the checks of `eco-skills/econometrics-skill/references/diagnostic_checklist.md` for its method:
-overlap and balance (PS), first-stage strength (IV: `iv_fit` reports it), pre-trends (DID), bandwidth sensitivity
-and covariate continuity (RDD). Compare specifications of the qtrix objects with `ols_compare`.
+overlap and balance (PS), first-stage strength (IV: `iv_fit` reports it), pre-trends (DID), manipulation test,
+bandwidth sensitivity and covariate continuity (RDD). Compare specifications of the qtrix objects with
+`ols_compare`. For a selection-on-observables OLS estimate, `causal_sensitivity` (robustness value and bounds
+benchmarked on the strongest observed control) says how strong an omitted confounder would have to be.
+
+Read logit/probit and models with interactions or polynomials through `ols_margins` (average marginal effects,
+contrasts or predicted probabilities, `by=` a group), not through raw coefficients.
 
 Interpret, do not dump: sign and magnitude in the outcome's units, uncertainty (SE / CI), practical relevance and
 the most fragile assumption. Templates per method: `eco-skills/econometrics-skill/references/interpretation.md`.

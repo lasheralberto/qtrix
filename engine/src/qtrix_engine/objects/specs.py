@@ -145,6 +145,78 @@ class MarkovSpec(_Fitted):
     switching_variance: bool = True
 
 
+class EventStudySpec(_Fitted):
+    type: ClassVar[ObjectType] = "equation"
+    method: Literal["event_study"] = "event_study"
+    outcome: str
+    cohort: str  # first treated period of each entity (0 / missing / after the last period = never treated)
+    estimator: Literal["did2s", "cs", "saturated", "lpdid", "twfe"] = "did2s"
+    pre: int = 4
+    post: int = 4
+    cluster: str | None = None  # None = the panel entity
+    control_group: Literal["never", "notyet"] = "never"  # Callaway-Sant'Anna only
+
+
+class RddSpec(_Fitted):
+    type: ClassVar[ObjectType] = "equation"
+    method: Literal["rdd"] = "rdd"
+    outcome: str
+    running: str
+    cutoff: float = 0.0
+    treatment: str | None = None  # fuzzy design: the treatment actually received
+    covariates: list[str] = Field(default_factory=list)
+    kernel: Literal["triangular", "epanechnikov", "uniform"] = "triangular"
+    p: int = 1
+    bwselect: Literal["mserd", "msetwo", "cerrd", "certwo"] = "mserd"
+    h: float | None = None
+    cluster: str | None = None
+
+
+class DmlSpec(_Fitted):
+    type: ClassVar[ObjectType] = "equation"
+    method: Literal["dml"] = "dml"
+    outcome: str
+    treatment: str
+    controls: list[str]
+    model: Literal["plr", "irm"] = "plr"
+    learner: Literal["forest", "lasso", "boosting"] = "forest"
+    n_folds: int = 5
+    seed: int = 42
+
+
+class CateSpec(_Fitted):
+    type: ClassVar[ObjectType] = "equation"
+    method: Literal["cate"] = "cate"
+    outcome: str
+    treatment: str
+    features: list[str]  # where the effect may vary
+    controls: list[str] = Field(default_factory=list)  # confounders that are not effect modifiers
+    n_estimators: int = 400
+    seed: int = 42
+
+
+class PdsSpec(_Fitted):
+    type: ClassVar[ObjectType] = "equation"
+    method: Literal["pds"] = "pds"
+    outcome: str
+    treatment: str
+    controls: list[str]
+    cov_type: Literal["nonrobust", "HC1", "cluster"] = "HC1"
+    cluster: str | None = None
+    seed: int = 42
+
+
+class SynthSpec(_Fitted):
+    type: ClassVar[ObjectType] = "equation"
+    method: Literal["synth"] = "synth"
+    outcome: str
+    treated: str
+    treatment_period: str
+    donors: list[str] | None = None
+    predictors: list[str] = Field(default_factory=list)
+    placebo: bool = True
+
+
 class GarchSpec(_Fitted):
     type: ClassVar[ObjectType] = "equation"
     method: Literal["garch"] = "garch"
@@ -255,8 +327,9 @@ class TextSpec(_Spec):
 AnySpec = Annotated[
     LsSpec | WlsSpec | GlmSpec | BinarySpec | CountSpec | OrderedSpec | MultinomialSpec | QuantileSpec
     | TslsSpec | LimlSpec | GmmSpec | PanelSpec | ArimaSpec | ArdlSpec | MarkovSpec
-    | GarchSpec | PythonSpec | VarSpec | VecmSpec | GroupSpec | TableSpec | GraphSpec | TextSpec | FrozenTableSpec
-    | FrozenGraphSpec,
+    | EventStudySpec | RddSpec | DmlSpec | CateSpec | PdsSpec | SynthSpec | GarchSpec | PythonSpec | VarSpec
+    | VecmSpec | GroupSpec
+    | TableSpec | GraphSpec | TextSpec | FrozenTableSpec | FrozenGraphSpec,
     Field(discriminator="method"),
 ]
 _ADAPTER: TypeAdapter[Any] = TypeAdapter(AnySpec)

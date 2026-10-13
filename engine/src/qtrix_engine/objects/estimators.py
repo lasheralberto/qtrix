@@ -739,7 +739,12 @@ _ESTIMATORS: dict[str, Callable[[Any], Estimate]] = {
 
 def estimate(spec: sp._Spec) -> Estimate:
     """Run the estimator of ``spec.method`` on the current page data (no side effects on any store)."""
-    return _ESTIMATORS[spec.method](spec)  # type: ignore[attr-defined]
+    fn = _ESTIMATORS.get(spec.method)  # type: ignore[attr-defined]
+    if fn is None:  # the causal estimators live in their own module, which builds on this one
+        from .causal import ESTIMATORS
+
+        fn = ESTIMATORS[spec.method]  # type: ignore[attr-defined]
+    return fn(spec)
 
 
 def summaries_match(a: Any, b: Any, tol: float = 1e-10) -> bool:

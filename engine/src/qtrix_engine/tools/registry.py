@@ -18,8 +18,10 @@ NAMESPACES = {
     "data": "Dataset catalog, descriptives, SQL and transformations",
     "ols": "Cross-section regression (OLS/WLS/GLM, logit/probit, count, ordered, multinomial, quantile) and "
            "specification tests",
-    "panel": "Panel data estimators (fixed/random effects, first differences)",
+    "panel": "Panel data estimators (fixed/random effects, first differences) and staggered event studies",
     "iv": "Instrumental variables (2SLS, LIML, GMM)",
+    "causal": "Causal inference: regression discontinuity and manipulation test, double ML, causal forests, "
+              "post-double-selection lasso, synthetic control, sensitivity to omitted variables",
     "ts": "Time series: unit roots, ARIMA, ARDL, Markov switching, VAR/VECM, Granger, cointegration, structural "
           "breaks, forecasting",
     "vol": "Volatility models: GARCH, EGARCH, GJR",
@@ -31,7 +33,7 @@ NAMESPACES = {
     "py": "Free Python cells in the project kernel, and results registered from them",
 }
 
-TOOL_MODULES = ("data", "ols", "panelreg", "ts", "vol", "obj", "viz", "ui", "recall", "journal", "py")
+TOOL_MODULES = ("data", "ols", "panelreg", "causal", "ts", "vol", "obj", "viz", "ui", "recall", "journal", "py")
 
 QxTarget = Literal["qx", "page", "obj", "report"]
 
