@@ -18,7 +18,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import __version__
 from .agents.lead import ChatSession, build_lead_agent
@@ -169,6 +169,10 @@ class UseModelRequest(BaseModel):
 
 class RuntimeInstallRequest(BaseModel):
     variant: str = "cpu"
+
+
+class RuntimeConfigRequest(BaseModel):
+    ctx_size: int = Field(ge=2048, le=262144)
 
 
 class Engine:
@@ -437,13 +441,15 @@ class Engine:
 
     def agent(self):
         if self._agent is None:
-            model = self.model_override or build_model(
-                self.user.active(), gateway=self.gateway, local_only=self.user.local_only)
+            profile = self.user.active()
+            model = self.model_override or build_model(profile, gateway=self.gateway, local_only=self.user.local_only)
             self._agent = build_lead_agent(
                 model,
                 namespaces=self.user.agent.namespaces,
                 instructions_extra=self.user.agent.instructions_extra,
                 memory_lookup=self.recall,
+                # Small local models have a short context: send tool schemas on demand.
+                compact=self.model_override is None and profile.provider in ("llamacpp", "ollama", "lmstudio"),
             )
         return self._agent
 
@@ -1201,6 +1207,7 @@ def create_app(settings: Settings | None = None, *, model_override: Any = None, 
             "runtime": engine.runtime.status(),
             "variant": engine.user.llamacpp.variant,
             "variants": list(VARIANTS),
+            "ctx_size": engine.user.llamacpp.ctx_size,
             "platform": platform_key(),
             "models_dir": str(settings.models_dir),
             "hf_token": has_api_key("huggingface"),
@@ -1278,6 +1285,13 @@ def create_app(settings: Settings | None = None, *, model_override: Any = None, 
         engine.user.llamacpp.variant = req.variant  # type: ignore[assignment]
         engine.update_settings(engine.user)
         return job.to_dict()
+
+    @app.post("/localai/runtime/config")
+    async def configure_runtime(req: RuntimeConfigRequest) -> dict[str, Any]:
+        """Change the context window; a model being served is reloaded with it on the next chat turn."""
+        engine.user.llamacpp.ctx_size = req.ctx_size
+        engine.update_settings(engine.user)
+        return await localai_status()
 
     @app.post("/localai/runtime/stop")
     async def stop_runtime() -> dict[str, Any]:

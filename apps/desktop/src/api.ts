@@ -374,6 +374,7 @@ export interface LocalAIStatus {
   runtime: { installed: { tag: string; variant: string; server: string } | null; running: boolean; model: string | null };
   variant: string;
   variants: string[];
+  ctx_size: number;
   platform: string;
   models_dir: string;
   hf_token: boolean;
@@ -430,6 +431,7 @@ export const localai = {
   use: (id: string) => request<UserSettings>("/localai/use", json({ id })),
   installRuntime: (variant: string) => request<Job>("/localai/runtime/install", json({ variant })),
   stopRuntime: () => request("/localai/runtime/stop", { method: "POST" }),
+  setContext: (ctx_size: number) => request<LocalAIStatus>("/localai/runtime/config", json({ ctx_size })),
   setHfToken: (token: string | null) => request("/settings/api-key", json({ provider: "huggingface", key: token })),
   systemInfo: () => request<SystemInfo>("/system/info"),
 };

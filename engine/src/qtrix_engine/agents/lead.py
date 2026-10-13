@@ -153,10 +153,26 @@ def _only_for_structures(spec: ToolSpec) -> ToolPrepareFunc[None] | None:
     return prepare
 
 
-def econometrics_toolset(namespaces: Sequence[str] | None = None) -> FunctionToolset:
+#: Tools a compact agent always sees; the rest are deferred until the model finds them with ``search_tools``.
+COMPACT_CORE = frozenset({"data_list_datasets", "data_describe_structure", "data_preview", "data_summary_stats",
+                          "data_set_structure", "ols_fit", "obj_list", "obj_view"})
+
+#: Calls that manage the agent itself (skills, tool discovery): never shown as Python cells.
+BOOKKEEPING_TOOLS = sk.SKILL_TOOLS | {"search_tools"}
+
+COMPACT_NOTE = """\
+- To keep the prompt small only a few tools are loaded. The others exist but are hidden: when you need one, call
+  search_tools with its name or a few keywords (e.g. ["panel_fit"], ["arima forecast"]) and it becomes available.
+  Hidden tools: {hidden}
+"""
+
+
+def econometrics_toolset(namespaces: Sequence[str] | None = None, *,
+                         core: frozenset[str] | None = None) -> FunctionToolset:
+    """``core`` (compact mode) lists the tools sent with every request; the others are deferred to tool search."""
     tools = [
         Tool(_wrap(spec), name=spec.name, takes_ctx=False, docstring_format="google",
-             prepare=_only_for_structures(spec))
+             prepare=_only_for_structures(spec), defer_loading=core is not None and spec.name not in core)
         for spec in all_tools(namespaces=namespaces)
     ]
     # Tool errors come back to the model as retries; the run's tool_calls_limit is the real bound on the loop.
@@ -199,13 +215,21 @@ def workspace_context() -> str:
 def build_lead_agent(model: Any, *, namespaces: Sequence[str] | None = None, instructions_extra: str = "",
                      extra_toolsets: Sequence[Any] = (),
                      memory_lookup: Callable[[str], str] | None = None,
-                     skills_library: Path | None = sk.SKILLS_DIR) -> Agent:
-    """``skills_library`` holds the method guides (skills) the agent may load; ``None`` gives it none."""
+                     skills_library: Path | None = sk.SKILLS_DIR, compact: bool = False) -> Agent:
+    """``skills_library`` holds the method guides (skills) the agent may load; ``None`` gives it none.
+
+    ``compact`` is for small local models with a short context: only ``COMPACT_CORE`` goes with every request and
+    the other tool schemas are loaded on demand through ``search_tools`` (skills are always loaded on demand)."""
+    instructions = LEAD_INSTRUCTIONS
+    if compact:
+        hidden = [s.name for s in all_tools(namespaces=namespaces) if s.name not in COMPACT_CORE]
+        instructions += COMPACT_NOTE.format(hidden=", ".join(hidden))
     agent = Agent(
         model,
         name="lead_econometrician",
-        instructions=LEAD_INSTRUCTIONS + ("\n" + instructions_extra if instructions_extra else ""),
-        toolsets=[econometrics_toolset(namespaces), pl.plan_toolset(), *extra_toolsets],
+        instructions=instructions + ("\n" + instructions_extra if instructions_extra else ""),
+        toolsets=[econometrics_toolset(namespaces, core=COMPACT_CORE if compact else None), pl.plan_toolset(),
+                  *extra_toolsets],
         capabilities=sk.skill_capabilities(skills_library),
         retries=TOOL_RETRIES,
     )
@@ -459,7 +483,7 @@ class ChatSession:
                             moved = state.take_finding()
                             if moved is not None:
                                 yield moved
-                            if final or event.part.tool_name in pl.WORK_TOOLS | sk.SKILL_TOOLS:
+                            if final or event.part.tool_name in pl.WORK_TOOLS | BOOKKEEPING_TOOLS:
                                 continue
                             args = event.part.args_as_dict()
                             cell = {"id": event.part.tool_call_id, "name": event.part.tool_name, "args": args,
@@ -475,7 +499,7 @@ class ChatSession:
                             if event.part.tool_name in pl.SCRATCH_TOOLS:
                                 yield {"type": "scratch", **state.scratch.dump()}
                                 continue
-                            if event.part.tool_name in sk.SKILL_TOOLS:
+                            if event.part.tool_name in BOOKKEEPING_TOOLS:
                                 continue
                             yield self._tool_result(event.part, state, journal)
                             state.unexplained.append(event.part.tool_call_id)

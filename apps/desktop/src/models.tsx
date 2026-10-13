@@ -13,6 +13,7 @@ import {
 } from "./api";
 
 const ACTIVE: Job["status"][] = ["queued", "running", "verifying"];
+const CTX_SIZES = [8192, 16384, 32768, 65536, 131072];
 
 function Progress({ job, onCancel }: { job: Job; onCancel(): void }) {
   const pct = job.progress == null ? null : Math.round(job.progress * 100);
@@ -75,6 +76,17 @@ function RuntimeCard({ status, onChange }: { status: LocalAIStatus; onChange(): 
         <button disabled={!!job} onClick={() => localai.installRuntime(mac ? "cpu" : variant).then(onChange)}>
           <Download size={14} /> {installed ? "Actualizar" : "Instalar"}
         </button>
+        <select
+          value={status.ctx_size}
+          onChange={(e) => localai.setContext(Number(e.target.value)).then(onChange)}
+          title="Ventana de contexto: tokens que caben en cada petición (más contexto = más RAM). Si el modelo está cargado, se recarga en el siguiente mensaje."
+        >
+          {[...new Set([...CTX_SIZES, status.ctx_size])].sort((a, b) => a - b).map((n) => (
+            <option key={n} value={n}>
+              Contexto {n >= 1024 ? `${Math.round(n / 1024)}k` : n}
+            </option>
+          ))}
+        </select>
         {status.runtime.running && (
           <button className="ghost" title="Detener el modelo cargado y liberar memoria" onClick={() => localai.stopRuntime().then(onChange)}>
             <Square size={13} /> Detener

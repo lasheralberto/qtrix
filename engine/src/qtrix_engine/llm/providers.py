@@ -59,7 +59,7 @@ class LlamaCppConfig(BaseModel):
     """Embedded llama.cpp runtime: which build to install and how to serve models."""
 
     variant: Literal["cpu", "vulkan", "cuda"] = "cpu"
-    ctx_size: int = 8192
+    ctx_size: int = 32768  # agent prompts (system + skills + tool schemas) already exceed 15k tokens
 
 
 class UserSettings(BaseModel):
