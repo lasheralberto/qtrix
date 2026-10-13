@@ -6,11 +6,11 @@ when installed · **planned** = tool namespace designed, not implemented yet. Ve
 
 | Library | Domain | Licence | Status | Namespace | What qtrix exposes / will expose |
 |---|---|---|---|---|---|
-| **statsmodels** 0.15 | OLS/WLS/GLM, discrete choice, time series, tests | BSD-3 | core | `ols`, `ts` | `ols_fit` (HC0–3, cluster, HAC), `ols_binary` (+AME), `ols_diagnostics` (BP, White, RESET, JB, DW, VIF), `ts_unit_root` (ADF/KPSS), `ts_arima` (SARIMAX + forecast), `ts_var` (VAR, Granger, IRF) |
+| **statsmodels** 0.15 | OLS/WLS/GLM, discrete choice, time series, tests | BSD-3 | core | `ols`, `ts` | `ols_fit` (HC0–3, cluster, HAC), `ols_binary` (+AME), `ols_count` (Poisson/PPML, NegBin, ZIP, ZINB), `ols_ordered`, `ols_multinomial`, `ols_quantile`, `ols_diagnostics` (BP, White, RESET, JB, DW, VIF), `ts_unit_root` (ADF/KPSS), `ts_arima` (SARIMAX + forecast), `ts_ardl` (ARDL + bounds test), `ts_markov` (regime switching), `ts_granger`, `ts_var` (VAR, Granger, IRF) |
 | **scipy** | distributions, optimisation | BSD-3 | core | — | Hausman χ², Q-Q plots |
 | **linearmodels** 7.0 | panel FE/RE/BE/FD, IV-2SLS/LIML/GMM, system | NCSA | extra `panel` | `panel`, `iv` | `panel_fit`, `panel_hausman`, `iv_fit` with first-stage F and over-id tests |
 | **pyfixest** 0.60 | HDFE OLS/Poisson, wild bootstrap, event study, `etable` | MIT | extra `panel` | `panel` | planned: `panel_feols` (multi-way FE), `panel_fepois`, wild cluster bootstrap, DiD `did2s` |
-| **arch** 8.0 | GARCH family, unit roots, cointegration, bootstrap | NCSA | extra `ts` | `ts`, `vol` | `ts_unit_root` PP / Zivot-Andrews; planned `vol_garch`, Engle-Granger / Phillips-Ouliaris |
+| **arch** 8.0 | GARCH family, unit roots, cointegration, bootstrap | NCSA | extra `ts` | `ts`, `vol` | `ts_unit_root` PP / Zivot-Andrews / DF-GLS / variance ratio; planned `vol_garch`, Engle-Granger / Phillips-Ouliaris |
 | **pmdarima** | auto-ARIMA | MIT | planned | `ts` | order selection |
 | **statsforecast** (Nixtla) | fast ETS/ARIMA/Theta, many series | Apache-2 | planned | `ts` | panel forecasting |
 | **ruptures** | structural break detection | BSD-2 | planned | `ts` | `ts_breaks` (PELT, binary segmentation) |

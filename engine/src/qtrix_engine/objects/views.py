@@ -240,7 +240,7 @@ def eq_coefplot(obj: StoredObject, exclude_intercept: bool = True) -> ViewResult
                       {"chart": "coefficients with 95% confidence intervals"}, code=obj.code)
 
 
-FITTED = ("ls", "wls", "glm", "binary", "tsls", "liml", "gmm", "panel", "arima")
+FITTED = ("ls", "wls", "glm", "binary", "quantile", "tsls", "liml", "gmm", "panel", "arima", "ardl")
 
 
 @view("equation", "residuals", title="Residual graph", group="Residual Diagnostics", methods=FITTED,
@@ -347,6 +347,13 @@ def garch_volatility(obj: StoredObject) -> ViewResult:
     out = _figure_view(obj, "figure", "title")
     out.llm = {"persistence": obj.summary.get("persistence"),
                "volatility_forecast": obj.summary.get("volatility_forecast")}
+    return out
+
+
+@view("equation", "regimes", title="Regime probabilities", methods=("markov",), requires=("plotly",))
+def markov_regimes(obj: StoredObject) -> ViewResult:
+    out = _figure_view(obj, "figure", "title")
+    out.llm = {k: obj.summary.get(k) for k in ("transition_matrix", "expected_duration", "regime_share")}
     return out
 
 

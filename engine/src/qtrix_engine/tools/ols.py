@@ -6,7 +6,16 @@ from typing import Any, Literal
 
 from ..context import get_context
 from ..objects.estimators import model_summary  # noqa: F401 - re-exported for older callers
-from ..objects.specs import BinarySpec, LsSpec, TableSpec, WlsSpec
+from ..objects.specs import (
+    BinarySpec,
+    CountSpec,
+    LsSpec,
+    MultinomialSpec,
+    OrderedSpec,
+    QuantileSpec,
+    TableSpec,
+    WlsSpec,
+)
 from ..objects.views import show
 from ._format import llm_view
 from .registry import Qx, tool
@@ -92,6 +101,92 @@ def ols_binary(dataset_id: str, formula: str, link: Literal["logit", "probit"] =
     spec = BinarySpec(page=page, formula=formula, sample=resolved_sample(dataset_id, sample), link=link,
                       marginal_effects=marginal_effects)
     return publish_object(spec, name, title=f"{link.title()}: {formula}")
+
+
+@tool("ols", requires=("statsmodels",), mutating=True, qx=Qx("qx", "equation", ("name",), family="equation"))
+def ols_count(dataset_id: str, formula: str, model: Literal["poisson", "negbin", "zip", "zinb"] = "poisson",
+              cov_type: Literal["nonrobust", "HC1", "cluster"] = "HC1", cluster: str | None = None,
+              sample: str | None = None, name: str | None = None) -> dict[str, Any]:
+    """Estimate a count-data model for a non-negative integer outcome (visits, patents, trade flows).
+
+    Poisson with robust standard errors is the pseudo-Poisson (PPML) estimator, which is also the right choice for
+    a positive continuous outcome in a gravity model. Choose negbin when the variance clearly exceeds the mean,
+    and zip/zinb when there are more zeros than the count distribution allows (the zero-inflation part is a
+    constant). Poisson and negbin results report incidence-rate ratios exp(b). Stored as a named equation object
+    like ols_fit; `name` re-estimates an existing one as a new version.
+
+    Args:
+        dataset_id: Dataset id or name.
+        formula: R/patsy formula, e.g. "visits ~ age + income + C(region)".
+        model: poisson, negbin (negative binomial), zip (zero-inflated Poisson) or zinb.
+        cov_type: nonrobust, HC1 (robust) or cluster.
+        cluster: Column with cluster ids when cov_type="cluster".
+        sample: Sample for this call only; omit for the dataset's active sample.
+        name: Object name; an existing name is re-estimated as a new version.
+    """
+    spec = CountSpec(page=get_context().workspace.get(dataset_id).name, formula=formula,
+                     sample=resolved_sample(dataset_id, sample), model=model, cov_type=cov_type, cluster=cluster)
+    return publish_object(spec, name, title=f"{model.upper()}: {formula}")
+
+
+@tool("ols", requires=("statsmodels",), mutating=True, qx=Qx("qx", "equation", ("name",), family="equation"))
+def ols_ordered(dataset_id: str, formula: str, link: Literal["logit", "probit"] = "logit",
+                sample: str | None = None, name: str | None = None) -> dict[str, Any]:
+    """Estimate an ordered logit/probit for an outcome with ordered categories (ratings, education level).
+
+    The outcome must be numeric with at least three distinct ordered values. There is no constant: the estimated
+    thresholds ("cut a/b") separate neighbouring categories. Stored as a named equation object like ols_fit;
+    `name` re-estimates an existing one as a new version.
+
+    Args:
+        dataset_id: Dataset id or name.
+        formula: R/patsy formula with the ordered outcome on the left, e.g. "rating ~ price + C(brand)".
+        link: logit or probit.
+        sample: Sample for this call only; omit for the dataset's active sample.
+        name: Object name; an existing name is re-estimated as a new version.
+    """
+    spec = OrderedSpec(page=get_context().workspace.get(dataset_id).name, formula=formula,
+                       sample=resolved_sample(dataset_id, sample), link=link)
+    return publish_object(spec, name, title=f"Ordered {link}: {formula}")
+
+
+@tool("ols", requires=("statsmodels",), mutating=True, qx=Qx("qx", "equation", ("name",), family="equation"))
+def ols_multinomial(dataset_id: str, formula: str, sample: str | None = None,
+                    name: str | None = None) -> dict[str, Any]:
+    """Estimate a multinomial logit for an unordered categorical outcome coded with numbers (choice of
+    transport mode, occupation). Coefficients are relative to the lowest category, reported as "x [category]".
+    Stored as a named equation object like ols_fit; `name` re-estimates an existing one as a new version.
+
+    Args:
+        dataset_id: Dataset id or name.
+        formula: R/patsy formula with the numerically coded outcome on the left, e.g. "mode ~ cost + time".
+        sample: Sample for this call only; omit for the dataset's active sample.
+        name: Object name; an existing name is re-estimated as a new version.
+    """
+    spec = MultinomialSpec(page=get_context().workspace.get(dataset_id).name, formula=formula,
+                           sample=resolved_sample(dataset_id, sample))
+    return publish_object(spec, name, title=f"Multinomial logit: {formula}")
+
+
+@tool("ols", requires=("statsmodels",), mutating=True, qx=Qx("qx", "equation", ("name",), family="equation"))
+def ols_quantile(dataset_id: str, formula: str, quantile: float = 0.5, vcov: Literal["robust", "iid"] = "robust",
+                 sample: str | None = None, name: str | None = None) -> dict[str, Any]:
+    """Estimate a quantile regression: the effect of the regressors on one quantile of the outcome (0.5 is the
+    median; 0.1 and 0.9 show the tails, e.g. a wage gap that differs along the distribution). Fit it for several
+    quantiles under different names and put them side by side with ols_compare. Stored as a named equation object
+    like ols_fit; `name` re-estimates an existing one as a new version.
+
+    Args:
+        dataset_id: Dataset id or name.
+        formula: R/patsy formula, e.g. "lwage ~ educ + exper".
+        quantile: Quantile strictly between 0 and 1.
+        vcov: robust (heteroskedasticity-robust) or iid standard errors.
+        sample: Sample for this call only; omit for the dataset's active sample.
+        name: Object name; an existing name is re-estimated as a new version.
+    """
+    spec = QuantileSpec(page=get_context().workspace.get(dataset_id).name, formula=formula,
+                        sample=resolved_sample(dataset_id, sample), quantile=quantile, vcov=vcov)
+    return publish_object(spec, name, title=f"Quantile {quantile:g}: {formula}")
 
 
 @tool("ols", requires=("statsmodels",), qx=Qx("obj", "diagnostics"))

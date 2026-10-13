@@ -43,6 +43,8 @@ _EMPTY = inspect.Parameter.empty
 # ---- families: method → (tool, tool arguments it fixes) ---------------------------------------------------------
 EQUATION_METHODS: dict[str, tuple[str, dict[str, Any]]] = {
     "ls": ("ols_fit", {}), "wls": ("ols_fit", {}), "binary": ("ols_binary", {}),
+    "count": ("ols_count", {}), "ordered": ("ols_ordered", {}), "multinomial": ("ols_multinomial", {}),
+    "quantile": ("ols_quantile", {}), "ardl": ("ts_ardl", {}), "markov": ("ts_markov", {}),
     "tsls": ("iv_fit", {"method": "2sls"}), "liml": ("iv_fit", {"method": "liml"}),
     "gmm": ("iv_fit", {"method": "gmm"}),
     "panel": ("panel_fit", {}), "arima": ("ts_arima", {}), "garch": ("vol_garch", {}),

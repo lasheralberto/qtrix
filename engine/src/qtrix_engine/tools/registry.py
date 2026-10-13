@@ -16,10 +16,12 @@ from typing import Any, Literal
 
 NAMESPACES = {
     "data": "Dataset catalog, descriptives, SQL and transformations",
-    "ols": "Cross-section regression (OLS/WLS/GLM, logit/probit) and specification tests",
+    "ols": "Cross-section regression (OLS/WLS/GLM, logit/probit, count, ordered, multinomial, quantile) and "
+           "specification tests",
     "panel": "Panel data estimators (fixed/random effects, first differences)",
     "iv": "Instrumental variables (2SLS, LIML, GMM)",
-    "ts": "Time series: unit roots, ARIMA, VAR/VECM, cointegration, structural breaks, forecasting",
+    "ts": "Time series: unit roots, ARIMA, ARDL, Markov switching, VAR/VECM, Granger, cointegration, structural "
+          "breaks, forecasting",
     "vol": "Volatility models: GARCH, EGARCH, GJR",
     "obj": "Named objects of the workfile: list, inspect versions, rename, copy, delete, groups",
     "viz": "Charts rendered in the analysis panel",

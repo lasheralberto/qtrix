@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from .. import expr
@@ -166,6 +167,133 @@ def _binary(spec: sp.BinarySpec) -> Estimate:
     return Estimate(summary, fit, code)
 
 
+def _design(spec: sp._Equation, notna: list[str] | None = None) -> tuple[Any, pd.Series, pd.DataFrame]:
+    """Prepared page, dependent variable and design matrix of the rows the formula keeps (patsy drops the rest)."""
+    import patsy
+
+    prep = prepare(spec.page, spec.formula, spec.sample, notna=notna or [])
+    with expr.readable_errors(prep.columns):
+        y, x = patsy.dmatrices(prep.formula, prep.frame, return_type="dataframe")
+    return prep, y.iloc[:, 0], x
+
+
+def _count(spec: sp.CountSpec) -> Estimate:
+    import statsmodels.api as sm
+    from statsmodels.discrete.count_model import ZeroInflatedNegativeBinomialP, ZeroInflatedPoisson
+
+    if spec.cov_type == "cluster" and not spec.cluster:
+        raise ValueError("cov_type='cluster' requires the 'cluster' column")
+    prep, y, x = _design(spec, [spec.cluster] if spec.cluster else [])
+    if (y < 0).any() or (y % 1 != 0).any():
+        raise ValueError(f"'{y.name}' must hold non-negative integer counts")
+    cls = {"poisson": sm.Poisson, "negbin": sm.NegativeBinomial, "zip": ZeroInflatedPoisson,
+           "zinb": ZeroInflatedNegativeBinomialP}[spec.model]
+    zero_inflated = spec.model in ("zip", "zinb")
+    kwargs: dict[str, Any] = {"exog_infl": x[["Intercept"]]} if zero_inflated and "Intercept" in x else {}
+    fit_kwargs: dict[str, Any] = {"disp": 0, "maxiter": 200, "cov_type": spec.cov_type}
+    if spec.cov_type == "cluster":
+        fit_kwargs["cov_kwds"] = {"groups": prep.frame[spec.cluster].reindex(y.index).to_numpy()}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = cls(y, x, **kwargs).fit(**fit_kwargs)
+    if not (getattr(res, "mle_retvals", None) or {}).get("converged", True) or not np.isfinite(res.bse).all():
+        raise ValueError(f"The {spec.model} model did not converge (the extra parameters are not identified by "
+                         "this sample): try a simpler model such as poisson or negbin")
+    label = {"poisson": "Poisson", "negbin": "Negative binomial", "zip": "Zero-inflated Poisson",
+             "zinb": "Zero-inflated negative binomial"}[spec.model]
+    summary = model_summary(res, model=label, formula=spec.formula, dataset=prep.info.name,
+                            cov_type=spec.cov_type, rename=prep.pretty)
+    _finish(summary, prep)
+    if not zero_inflated:  # exp(b): proportional change in the expected count per unit of x
+        summary["incidence_rate_ratios"] = clean({prep.pretty(str(k)): float(np.exp(v))
+                                                  for k, v in res.params.items() if str(k) != "alpha"})
+    infl = ", exog_infl=X[['Intercept']]" if zero_inflated else ""
+    code = (f"import patsy\nfrom statsmodels.discrete.count_model import {cls.__name__}\n"
+            if zero_inflated else "import patsy, statsmodels.api as sm\n")
+    code += (f"df = qtrix.load({prep.info.name!r})\n"
+             f"y, X = patsy.dmatrices({spec.formula!r}, df, return_type='dataframe')\n"
+             f"res = {cls.__name__ if zero_inflated else 'sm.' + cls.__name__}(y, X{infl})"
+             f".fit(cov_type={spec.cov_type!r})\nprint(res.summary())")
+    return Estimate(summary, res, code)
+
+
+def _ordered(spec: sp.OrderedSpec) -> Estimate:
+    from statsmodels.miscmodels.ordinal_model import OrderedModel
+
+    prep, y, x = _design(spec)
+    x = x.drop(columns="Intercept", errors="ignore")  # the thresholds play the role of the constant
+    if x.shape[1] == 0:
+        raise ValueError("An ordered model needs at least one regressor besides the constant")
+    if y.nunique() < 3:
+        raise ValueError(f"'{y.name}' has {y.nunique()} distinct values: use ols_binary for a 0/1 outcome")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = OrderedModel(y, x, distr=spec.link).fit(method="bfgs", disp=0, maxiter=1000)
+    summary = model_summary(res, model=f"Ordered {spec.link}", formula=spec.formula, dataset=prep.info.name,
+                            cov_type="nonrobust", rename=lambda n: f"cut {n}" if "/" in n else prep.pretty(n))
+    _finish(summary, prep)
+    summary["categories"] = [float(v) for v in sorted(y.unique())]
+    code = (f"import patsy\nfrom statsmodels.miscmodels.ordinal_model import OrderedModel\n"
+            f"df = qtrix.load({prep.info.name!r})\n"
+            f"y, X = patsy.dmatrices({spec.formula!r}, df, return_type='dataframe')\n"
+            f"res = OrderedModel(y.iloc[:, 0], X.drop(columns='Intercept'), distr={spec.link!r})"
+            ".fit(method='bfgs')\nprint(res.summary())")
+    return Estimate(summary, res, code)
+
+
+def _multinomial(spec: sp.MultinomialSpec) -> Estimate:
+    import statsmodels.api as sm
+
+    prep, y, x = _design(spec)
+    if y.nunique() < 3:
+        raise ValueError(f"'{y.name}' has {y.nunique()} distinct values: use ols_binary for a 0/1 outcome")
+    if (y % 1 == 0).all():
+        y = y.astype(int)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = sm.MNLogit(y, x).fit(method="newton", disp=0, maxiter=200)
+    categories = sorted(y.unique().tolist())
+    ci = res.conf_int()  # one row per (outcome, variable), outcome-major: the order of the loops below
+    rows = []
+    for column, outcome in zip(res.params.columns, categories[1:], strict=True):  # columns count from the base
+        for var in res.params.index:
+            lo, hi = ci.iloc[len(rows)]
+            rows.append(clean({
+                "name": f"{prep.pretty(str(var))} [{outcome}]", "coef": float(res.params.loc[var, column]),
+                "se": float(res.bse.loc[var, column]), "stat": float(res.tvalues.loc[var, column]),
+                "p": float(res.pvalues.loc[var, column]), "ci_low": float(lo), "ci_high": float(hi)}))
+    summary = clean({
+        "model": "Multinomial logit", "formula": spec.formula, "dataset": prep.info.name, "dep_var": str(y.name),
+        "n_obs": int(res.nobs), "cov_type": "nonrobust", "coefficients": rows, "base_category": categories[0],
+        "categories": categories, "pseudo_r2": float(res.prsquared), "log_likelihood": float(res.llf),
+        "aic": float(res.aic), "bic": float(res.bic),
+    })
+    _finish(summary, prep)
+    code = (f"import patsy, statsmodels.api as sm\ndf = qtrix.load({prep.info.name!r})\n"
+            f"y, X = patsy.dmatrices({spec.formula!r}, df, return_type='dataframe')\n"
+            "res = sm.MNLogit(y.iloc[:, 0], X).fit()\nprint(res.summary())")
+    return Estimate(summary, res, code)
+
+
+def _quantile(spec: sp.QuantileSpec) -> Estimate:
+    import statsmodels.api as sm
+
+    if not 0 < spec.quantile < 1:
+        raise ValueError("quantile must be strictly between 0 and 1")
+    prep, y, x = _design(spec)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = sm.QuantReg(y, x).fit(q=spec.quantile, vcov=spec.vcov, max_iter=1000)
+    summary = model_summary(res, model=f"Quantile (q={spec.quantile:g})", formula=spec.formula,
+                            dataset=prep.info.name, cov_type=spec.vcov, rename=prep.pretty)
+    _finish(summary, prep)
+    summary["quantile"] = spec.quantile
+    code = (f"import patsy, statsmodels.api as sm\ndf = qtrix.load({prep.info.name!r})\n"
+            f"y, X = patsy.dmatrices({spec.formula!r}, df, return_type='dataframe')\n"
+            f"res = sm.QuantReg(y, X).fit(q={spec.quantile}, vcov={spec.vcov!r})\nprint(res.summary())")
+    return Estimate(summary, res, code)
+
+
 # ---- equations: linearmodels --------------------------------------------------------------------------------
 _PANEL_COV: dict[str, dict[str, Any]] = {
     "unadjusted": {"cov_type": "unadjusted"},
@@ -308,6 +436,103 @@ def _arima(spec: sp.ArimaSpec) -> Estimate:
         out.extras["forecast_figure"] = figure_data(fig)
         out.extras["forecast_title"] = f"Forecast {spec.column} · {label}"
     return out
+
+
+def _ardl(spec: sp.ArdlSpec) -> Estimate:
+    from statsmodels.tsa.ardl import ARDL, UECM, ardl_select_order
+
+    exog = spec.exog
+    info, df = _ts_frame(spec, [spec.column, *exog], "An ARDL model")
+    data = trim(df[[spec.column, *exog]])
+    if data.isna().any().any():
+        raise ValueError(f"The ARDL sample {data.index[0].date()}–{data.index[-1].date()} has missing periods; "
+                         "fill them or use a shorter sample")
+    y, x = data[spec.column], (data[exog] if exog else None)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        if spec.lags is None or (exog and spec.exog_lags is None):
+            sel = ardl_select_order(y, spec.max_lag, x, spec.max_lag if exog else None, ic=spec.ic,
+                                    trend=spec.trend)
+            model = sel.model
+        else:
+            model = ARDL(y, spec.lags, x, spec.exog_lags if exog else None, trend=spec.trend)
+        res = model.fit()
+        order = model.ardl_order
+        bounds = None
+        if exog:
+            case = {"n": 1, "c": 3, "ct": 5}[spec.trend]
+            try:
+                # The error-correction form needs every regressor lagged at least once, even when the
+                # selected ARDL has a contemporaneous-only regressor.
+                uecm = UECM(y, order[0], x, {c: max(q, 1) for c, q in zip(exog, order[1:], strict=True)},
+                            trend=spec.trend)
+                bt = uecm.fit().bounds_test(case=case)
+                crit = bt.critical_values
+                bounds = clean({"case": case, "f_stat": float(bt.statistic), "null": bt.null,
+                                "critical_values_5pct": {"lower_I0": float(crit.loc[95.0, "lower"]),
+                                                         "upper_I1": float(crit.loc[95.0, "upper"])},
+                                "reject_no_cointegration_5pct": bool(bt.statistic > crit.loc[95.0, "upper"])})
+            except (ValueError, KeyError, IndexError):  # no valid bounds-test case for this specification
+                bounds = None
+    label = f"ARDL({', '.join(str(o) for o in order)})"
+    summary = clean({
+        "model": label, "formula": f"{spec.column} ~ {label}" + (f" + {' + '.join(exog)}" if exog else ""),
+        "dataset": info.name, "dep_var": spec.column, "n_obs": int(res.nobs), "cov_type": "nonrobust",
+        "aic": float(res.aic), "bic": float(res.bic), "log_likelihood": float(res.llf),
+        "ardl_order": [int(o) for o in order], "bounds_test": bounds,
+        "sample": f"{y.index[0].date()} – {y.index[-1].date()}",
+        "coefficients": coef_rows(res.params, res.bse, res.tvalues, res.pvalues, res.conf_int()),
+    })
+    x_code = f"df[{exog!r}]" if exog else "None"
+    code = (f"from statsmodels.tsa.ardl import ARDL\ndf = qtrix.frame({info.name!r})\n"
+            f"res = ARDL(df[{spec.column!r}], {order[0]}, {x_code}, {list(order[1:]) if exog else None}, "
+            f"trend={spec.trend!r}).fit()\nprint(res.summary())")
+    return Estimate(summary, res, code)
+
+
+def _markov(spec: sp.MarkovSpec) -> Estimate:
+    import plotly.graph_objects as go
+    from statsmodels.tsa.regime_switching.markov_autoregression import MarkovAutoregression
+    from statsmodels.tsa.regime_switching.markov_regression import MarkovRegression
+
+    k = spec.k_regimes
+    if k < 2:
+        raise ValueError("A regime-switching model needs at least two regimes")
+    info, df = _ts_frame(spec, [spec.column], "A Markov-switching model")
+    y = trim(df[spec.column])
+    if y.isna().any():
+        raise ValueError(f"The series {spec.column} has missing periods in {y.index[0].date()}–{y.index[-1].date()}")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        if spec.order:
+            model = MarkovAutoregression(y, k_regimes=k, order=spec.order, switching_ar=False,
+                                         switching_variance=spec.switching_variance)
+        else:
+            model = MarkovRegression(y, k_regimes=k, trend="c", switching_variance=spec.switching_variance)
+        res = model.fit(disp=False)
+    label = f"Markov {f'AR({spec.order})' if spec.order else 'regression'}, {k} regimes"
+    trans = res.regime_transition[:, :, 0]  # [to, from]
+    probs = res.smoothed_marginal_probabilities
+    summary = clean({
+        "model": label, "formula": f"{spec.column} ~ {label}", "dataset": info.name, "dep_var": spec.column,
+        "n_obs": int(res.nobs), "cov_type": "approx", "aic": float(res.aic), "bic": float(res.bic),
+        "log_likelihood": float(res.llf), "sample": f"{y.index[0].date()} – {y.index[-1].date()}",
+        "coefficients": coef_rows(res.params, res.bse, res.tvalues, res.pvalues, res.conf_int()),
+        "transition_matrix": {f"from {i}": {f"to {j}": float(trans[j, i]) for j in range(k)} for i in range(k)},
+        "expected_duration": {f"regime {i}": float(d) for i, d in enumerate(res.expected_durations)},
+        "regime_share": {f"regime {i}": float(probs.iloc[:, i].mean()) for i in range(k)},
+    })
+    fig = go.Figure()
+    for i in range(k):
+        fig.add_scatter(x=_x(probs.index), y=probs.iloc[:, i].to_numpy(), name=f"P(regime {i})", mode="lines")
+    fig.update_layout(yaxis={"range": [0, 1], "title": "Smoothed probability"})
+    cls = "MarkovAutoregression" if spec.order else "MarkovRegression"
+    args = (f"order={spec.order}, switching_ar=False, " if spec.order else "trend='c', ")
+    code = (f"from statsmodels.tsa.regime_switching.markov_{'autoregression' if spec.order else 'regression'} "
+            f"import {cls}\ny = qtrix.frame({info.name!r})[{spec.column!r}].dropna()\n"
+            f"res = {cls}(y, k_regimes={k}, {args}switching_variance={spec.switching_variance}).fit()\n"
+            "print(res.summary())")
+    return Estimate(summary, res, code, {"figure": figure_data(fig), "title": f"Regime probabilities · {label}"})
 
 
 def _var(spec: sp.VarSpec) -> Estimate:
@@ -503,7 +728,9 @@ def _python(spec: sp.PythonSpec) -> Estimate:
 
 
 _ESTIMATORS: dict[str, Callable[[Any], Estimate]] = {
-    "ls": _ls, "wls": _ls, "glm": _glm, "binary": _binary, "tsls": _iv, "liml": _iv, "gmm": _iv,
+    "ls": _ls, "wls": _ls, "glm": _glm, "binary": _binary, "count": _count, "ordered": _ordered,
+    "multinomial": _multinomial, "quantile": _quantile, "ardl": _ardl, "markov": _markov,
+    "tsls": _iv, "liml": _iv, "gmm": _iv,
     "panel": _panel, "arima": _arima, "garch": _garch, "var": _var,
     "vecm": _vecm, "group": _group, "table": _table, "graph": _graph,
     "text": _text, "python": _python, "frozen_table": _frozen_table, "frozen_graph": _frozen_graph,

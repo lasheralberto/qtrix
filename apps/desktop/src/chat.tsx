@@ -32,6 +32,7 @@ import {
   type Scratch,
 } from "./api";
 import { Markdown } from "./blocks";
+import { describeAction, words } from "./actions";
 import { CodeCell, TurnCode } from "./cells";
 
 export interface Turn {
@@ -354,8 +355,8 @@ export function TurnHead(props: {
   onOpenWorkspace(): void;
 }) {
   const { turn } = props;
-  // The live turn shows its cells as they run; past turns keep them folded behind the question.
-  const [open, setOpen] = useState(turn.running);
+  // The actions stay folded, live turn included: the ticker below tells what the agent is doing as it goes.
+  const [open, setOpen] = useState(false);
   // Notes are already in the feed as their own blocks: their call is not shown as an action.
   const cells = turn.tools.filter((t) => !HIDDEN_TOOLS.has(t.name));
   const n = cells.length;
@@ -397,11 +398,42 @@ export function TurnHead(props: {
       )}
       {turn.running && !turn.text && (
         <span className="status-line">
-          <LoaderCircle size={14} className="spin" />{" "}
-          {turn.status ?? (n ? "trabajando…" : "pensando…")}
+          <LoaderCircle size={14} className="spin" /> <Ticker text={liveMessage(turn, cells)} />
         </span>
       )}
     </section>
+  );
+}
+
+/** What the agent is doing now, in at most 10 words: the phase, else a plain description of its latest action. */
+function liveMessage(turn: Turn, cells: CellInfo[]): string {
+  if (turn.status) return words(turn.status);
+  const last = cells[cells.length - 1];
+  return last ? describeAction(last) : "Pensando en cómo abordarlo…";
+}
+
+/** A line of text that changes by blurring out the old message and blurring in the new one. */
+function Ticker({ text }: { text: string }) {
+  const [shown, setShown] = useState([{ id: 0, text }]);
+  const next = useRef(0);
+  useEffect(() => {
+    setShown((prev) =>
+      prev[prev.length - 1].text === text ? prev : [...prev.slice(-1), { id: ++next.current, text }],
+    );
+  }, [text]);
+  useEffect(() => {
+    if (shown.length < 2) return;
+    const t = setTimeout(() => setShown((prev) => prev.slice(-1)), 500);
+    return () => clearTimeout(t);
+  }, [shown]);
+  return (
+    <span className="ticker" aria-live="polite">
+      {shown.map((m, i) => (
+        <span key={m.id} className={i === shown.length - 1 ? "tick in" : "tick out"}>
+          {m.text}
+        </span>
+      ))}
+    </span>
   );
 }
 

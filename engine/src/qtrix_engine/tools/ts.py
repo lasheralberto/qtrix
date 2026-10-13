@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from ..context import get_context
-from ..objects.specs import ArimaSpec, VarSpec, VecmSpec
+from ..objects.specs import ArdlSpec, ArimaSpec, MarkovSpec, VarSpec, VecmSpec
 from ..objects.views import show
 from ..panel import Block
 from ._format import clean, figure_data
@@ -26,24 +26,35 @@ def _frame(dataset_id: str, columns: list[str], what: str, sample: str | None = 
 
 
 @tool("ts", requires=("statsmodels",), kinds=TS, qx=Qx("page", "unit_root", ("column",), aliases=("uroot",)))
-def ts_unit_root(dataset_id: str, column: str, test: Literal["adf", "kpss", "pp", "za"] = "adf",
-                 trend: Literal["n", "c", "ct"] = "c", sample: str | None = None) -> dict[str, Any]:
-    """Unit-root / stationarity test on a series: ADF, KPSS, Phillips-Perron or Zivot-Andrews (structural break).
+def ts_unit_root(dataset_id: str, column: str,
+                 test: Literal["adf", "kpss", "pp", "za", "dfgls", "vr"] = "adf",
+                 trend: Literal["n", "c", "ct"] = "c", lags: int | None = None,
+                 sample: str | None = None) -> dict[str, Any]:
+    """Unit-root / stationarity test on a series: ADF, KPSS, Phillips-Perron, Zivot-Andrews (structural break),
+    DF-GLS (more powerful than ADF in small samples) or the variance-ratio random-walk test.
 
     Args:
         dataset_id: Dataset id or name (must be a time series).
         column: Series to test.
-        test: adf (H0 unit root), kpss (H0 stationary), pp (H0 unit root, needs arch), za (needs arch).
-        trend: n (none), c (constant) or ct (constant + trend).
+        test: adf (H0 unit root), kpss (H0 stationary), pp, za, dfgls (H0 unit root) or vr (H0 random walk);
+            all but adf and kpss need arch.
+        trend: n (none), c (constant) or ct (constant + trend). dfgls takes c or ct and vr takes c or n; the
+            other value falls back to c.
+        lags: dfgls: fixed lag length (chosen by information criterion when omitted); vr: variance-ratio horizon
+            (default 4).
         sample: Sample for this call only, e.g. "1990q1 2008q4"; omit for the dataset's active sample.
     """
     info, df = _frame(dataset_id, [column], "A unit-root test", sample)
     y = df[column].dropna()
-    if test in {"pp", "za"}:
+    if test in {"pp", "za", "dfgls", "vr"}:
         from arch import unitroot
 
         if test == "pp":
             res = unitroot.PhillipsPerron(y.to_numpy(), trend=trend)
+        elif test == "dfgls":
+            res = unitroot.DFGLS(y.to_numpy(), lags=lags, trend="ct" if trend == "ct" else "c")
+        elif test == "vr":
+            res = unitroot.VarianceRatio(y.to_numpy(), lags=lags or 4, trend="n" if trend == "n" else "c")
         else:
             res = unitroot.ZivotAndrews(y.to_numpy(), trend="c" if trend == "n" else trend)
         out = {"statistic": float(res.stat), "p_value": float(res.pvalue), "lags": int(res.lags),
@@ -160,6 +171,102 @@ def ts_vecm(dataset_id: str, columns: list[str], coint_rank: int | None = None, 
     if "diff" in s:
         out["previous_version"] = s["diff"]["from_version"]
     return clean(out)
+
+
+@tool("ts", requires=("statsmodels",), kinds=TS, mutating=True, qx=Qx("qx", "equation", ("name",), family="equation"))
+def ts_ardl(dataset_id: str, column: str, exog: list[str] | None = None, lags: int | None = None,
+            exog_lags: int | None = None, max_lag: int = 4, trend: Literal["n", "c", "ct"] = "c",
+            ic: Literal["aic", "bic"] = "aic", sample: str | None = None, name: str | None = None) -> dict[str, Any]:
+    """Autoregressive distributed-lag model: a series on its own lags and on current and lagged regressors.
+    With regressors it also runs the Pesaran-Shin-Smith bounds test for a long-run relationship, valid whether
+    the series are I(0) or I(1) (but not I(2)): an F statistic above the upper bound means cointegration.
+    The lag orders are chosen by information criterion up to `max_lag` unless given. Stored as a named equation
+    object; `name` re-estimates an existing one as a new version.
+
+    Args:
+        dataset_id: Dataset id or name (must be a time series).
+        column: Dependent series.
+        exog: Regressor series.
+        lags: Lags of the dependent series; omit to select them.
+        exog_lags: Lags of every regressor (0 = contemporaneous only); omit to select them.
+        max_lag: Largest lag considered when selecting.
+        trend: n (none), c (constant) or ct (constant + trend); also fixes the bounds-test case (1, 3 or 5).
+        ic: aic or bic for the selection.
+        sample: Sample for this call only, e.g. "1990q1 2008q4"; omit for the dataset's active sample.
+        name: Object name (e.g. eq_ardl). An existing name is re-estimated as a new version.
+    """
+    ctx = get_context()
+    spec = ArdlSpec(page=ctx.workspace.get(dataset_id).name, sample=resolved_sample(dataset_id, sample),
+                    column=column, exog=exog or [], lags=lags, exog_lags=exog_lags, max_lag=max_lag, trend=trend,
+                    ic=ic)
+    return publish(spec, name, title=f"ARDL · {column}")[1]
+
+
+@tool("ts", requires=("statsmodels",), kinds=TS, mutating=True, qx=Qx("qx", "equation", ("name",), family="equation"))
+def ts_markov(dataset_id: str, column: str, k_regimes: int = 2, order: int = 0, switching_variance: bool = True,
+              sample: str | None = None, name: str | None = None) -> dict[str, Any]:
+    """Markov-switching model: the series moves between hidden regimes (expansion/recession, calm/turbulent)
+    with their own mean and, optionally, variance. Reports the transition probabilities, the expected duration of
+    each regime and a chart of the smoothed regime probabilities. Stored as a named equation object; `name`
+    re-estimates an existing one as a new version.
+
+    Args:
+        dataset_id: Dataset id or name (must be a time series).
+        column: Series to model (a growth rate or return, not a trending level).
+        k_regimes: Number of regimes (2 or 3).
+        order: Autoregressive order; 0 gives a regime-dependent mean (MarkovRegression), >0 a Hamilton-style
+            Markov-switching AR with a regime-dependent mean.
+        switching_variance: Whether the variance also changes with the regime.
+        sample: Sample for this call only, e.g. "1990q1 2008q4"; omit for the dataset's active sample.
+        name: Object name (e.g. eq_regimes). An existing name is re-estimated as a new version.
+    """
+    ctx = get_context()
+    spec = MarkovSpec(page=ctx.workspace.get(dataset_id).name, sample=resolved_sample(dataset_id, sample),
+                      column=column, k_regimes=k_regimes, order=order, switching_variance=switching_variance)
+    obj, out = publish(spec, name, title=f"Markov switching · {column}")
+    show(obj.name, "regimes")
+    for key in ("transition_matrix", "expected_duration", "regime_share"):
+        out[key] = obj.summary[key]
+    return clean(out)
+
+
+@tool("ts", requires=("statsmodels",), kinds=TS,
+      qx=Qx("page", "granger", ("caused", "causing")))
+def ts_granger(dataset_id: str, caused: str, causing: list[str], maxlag: int = 4, diff: int = 0,
+               sample: str | None = None) -> dict[str, Any]:
+    """Pairwise Granger-causality tests: do the past values of each `causing` series help predict `caused` beyond
+    its own past? F tests for every lag from 1 to maxlag. Granger causality is about predictive content, not
+    structural causation, and the series should be stationary (difference them with `diff` otherwise). Use ts_var
+    for the system-wide version.
+
+    Args:
+        dataset_id: Dataset id or name (must be a time series).
+        caused: Series being predicted.
+        causing: Series whose lags are tested.
+        maxlag: Largest lag tested.
+        diff: Times every series is differenced first (0, 1 or 2).
+        sample: Sample for this call only; omit for the dataset's active sample.
+    """
+    from statsmodels.tsa.stattools import grangercausalitytests
+
+    info, df = _frame(dataset_id, [caused, *causing], "A Granger-causality test", sample)
+    data = df[[caused, *causing]].dropna()
+    for _ in range(diff):
+        data = data.diff().dropna()
+    rows, results = [], {}
+    for x in causing:
+        pair = data[[caused, x]]
+        tests = grangercausalitytests(pair, maxlag=maxlag)
+        results[x] = {}
+        for lag, (stats, *_) in tests.items():
+            f_stat, p = float(stats["ssr_ftest"][0]), float(stats["ssr_ftest"][1])
+            results[x][f"lag {lag}"] = {"f_stat": f_stat, "p_value": p}
+            rows.append({"test": f"Granger {x} → {caused}, lag {lag}", "statistic": f_stat, "p_value": p,
+                         "null_hypothesis": f"{x} does not Granger-cause {caused}", "reject_5pct": bool(p < 0.05)})
+    get_context().panel.add(Block(kind="diagnostics", title=f"Granger causality → {caused}",
+                                  data={"tests": clean(rows)}))
+    return clean({"caused": caused, "dataset": info.name, "differenced": diff, "n_obs": len(data), "results": results,
+                  "sample": f"{data.index[0].date()} – {data.index[-1].date()}"})
 
 
 @tool("ts", requires=("statsmodels",), kinds=TS, qx=Qx("page", "cointegration", ("columns",), aliases=("coint",)))

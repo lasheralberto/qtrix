@@ -67,6 +67,28 @@ class BinarySpec(_Equation):
     marginal_effects: bool = True
 
 
+class CountSpec(_Equation):
+    method: Literal["count"] = "count"
+    model: Literal["poisson", "negbin", "zip", "zinb"] = "poisson"
+    cov_type: Literal["nonrobust", "HC1", "cluster"] = "HC1"
+    cluster: str | None = None
+
+
+class OrderedSpec(_Equation):
+    method: Literal["ordered"] = "ordered"
+    link: Literal["logit", "probit"] = "logit"
+
+
+class MultinomialSpec(_Equation):
+    method: Literal["multinomial"] = "multinomial"
+
+
+class QuantileSpec(_Equation):
+    method: Literal["quantile"] = "quantile"
+    quantile: float = 0.5
+    vcov: Literal["robust", "iid"] = "robust"
+
+
 class _Iv(_Equation):
     cov_type: Literal["unadjusted", "robust", "clustered", "kernel"] = "robust"
     cluster: str | None = None
@@ -100,6 +122,27 @@ class ArimaSpec(_Fitted):
     seasonal_order: list[int] | None = None
     exog: list[str] | None = None
     forecast_steps: int = 0
+
+
+class ArdlSpec(_Fitted):
+    type: ClassVar[ObjectType] = "equation"
+    method: Literal["ardl"] = "ardl"
+    column: str
+    exog: list[str] = Field(default_factory=list)
+    lags: int | None = None  # None = chosen by information criterion up to max_lag
+    exog_lags: int | None = None
+    max_lag: int = 4
+    trend: Literal["n", "c", "ct"] = "c"
+    ic: Literal["aic", "bic"] = "aic"
+
+
+class MarkovSpec(_Fitted):
+    type: ClassVar[ObjectType] = "equation"
+    method: Literal["markov"] = "markov"
+    column: str
+    k_regimes: int = 2
+    order: int = 0  # autoregressive order; 0 = Markov-switching mean (MarkovRegression)
+    switching_variance: bool = True
 
 
 class GarchSpec(_Fitted):
@@ -210,8 +253,9 @@ class TextSpec(_Spec):
 
 
 AnySpec = Annotated[
-    LsSpec | WlsSpec | GlmSpec | BinarySpec | TslsSpec | LimlSpec | GmmSpec | PanelSpec | ArimaSpec | GarchSpec
-    | PythonSpec | VarSpec | VecmSpec | GroupSpec | TableSpec | GraphSpec | TextSpec | FrozenTableSpec
+    LsSpec | WlsSpec | GlmSpec | BinarySpec | CountSpec | OrderedSpec | MultinomialSpec | QuantileSpec
+    | TslsSpec | LimlSpec | GmmSpec | PanelSpec | ArimaSpec | ArdlSpec | MarkovSpec
+    | GarchSpec | PythonSpec | VarSpec | VecmSpec | GroupSpec | TableSpec | GraphSpec | TextSpec | FrozenTableSpec
     | FrozenGraphSpec,
     Field(discriminator="method"),
 ]

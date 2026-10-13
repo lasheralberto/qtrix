@@ -398,6 +398,12 @@ button.link { border: none; background: none; padding: 0; color: var(--accent); 
 .row-actions { display: flex; gap: 4px; justify-content: flex-end; }
 .models-foot { align-items: center; flex-wrap: wrap; }
 .models-foot input { width: 220px; }
+.ticker { display: inline-grid; }
+.tick { grid-area: 1 / 1; }
+.tick.in { animation: tick-in 0.45s ease both; }
+.tick.out { animation: tick-out 0.45s ease both; pointer-events: none; }
+@keyframes tick-in { from { opacity: 0; filter: blur(6px); } to { opacity: 1; filter: blur(0); } }
+@keyframes tick-out { from { opacity: 1; filter: blur(0); } to { opacity: 0; filter: blur(6px); } }
 .status-line { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); font-size: 12.5px; }
 .home-path { font: 12px var(--mono); background: var(--hover); padding: 3px 8px; border-radius: 6px; overflow-wrap: anywhere; }
 .move-box { border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 10px; margin: 6px 0; background: var(--surface-2); }
@@ -559,6 +565,7 @@ button.link { border: none; background: none; padding: 0; color: var(--accent); 
   .workspace, .workspace.open, .rail, .rail.open, .panel { transition: opacity 0.15s ease, visibility 0s; }
   .workspace, .rail { transform: none; }
   .ws-section, .ws-card, .ws-tick, .ws-dot, .ws-live-dot { animation: none; }
+  .tick.in, .tick.out { animation-duration: 0.01s; }
 }
 
 /* method catalog (GET /methods): area cards in the empty conversation, the full catalog in a modal */
