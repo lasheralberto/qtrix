@@ -1,0 +1,1 @@
+Talk to your data: qtrix is a local team of AI econometricians. Ask in plain English, watch the agent run real estimators (tables, charts, tests), then flip a switch and the report writes itself. Your data never leaves your machine.
