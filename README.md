@@ -124,3 +124,20 @@ Las estimaciones se validan contra statsmodels/linearmodels (coeficientes y erro
 bucle chat → herramienta → panel se prueba con un modelo simulado.
 
 **Empaquetar un instalador** (`.exe`, `.dmg`, `.AppImage`): `cd apps/desktop && npm run dist`.
+
+---
+
+## Contribuir
+
+¡Las contribuciones son bienvenidas! Lee [CONTRIBUTING.md](CONTRIBUTING.md) (en inglés), abre un issue para
+comentar tu idea y envía un pull request. Los nuevos estimadores deben validarse contra una implementación de
+referencia. En tu primer PR un bot te pedirá firmar el [CLA](CLA.md). Vulnerabilidades: [SECURITY.md](SECURITY.md).
+
+## Licencia
+
+qtrix es **código fuente disponible** bajo la [Business Source License 1.1](LICENSE): puedes usarlo, estudiarlo y
+modificarlo libremente (también en producción, para investigación, docencia, uso interno o consultoría), pero no
+ofrecerlo a terceros como servicio alojado o producto competidor. Cada versión pasa automáticamente a
+**Apache-2.0** cuatro años después de su publicación. Para otros usos, contacta con el autor.
+
+English version: [README.en.md](README.en.md).

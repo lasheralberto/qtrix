@@ -6,6 +6,7 @@ authors = [
     { name = "Alberto Martinez", email = "lasheralberto@gmail.com" }
 ]
 requires-python = ">=3.12"
+license = "BUSL-1.1"
 dependencies = [
     "a2a-sdk>=1.2.2",
     "duckdb>=1.5.6",

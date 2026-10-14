@@ -18,6 +18,21 @@ apps/desktop/release/
 *.tvim
 .qtrix/
 
+# Secrets and personal agent instructions
+.env
+.env.*
+!.env.example
+CLAUDE.local.md
+.remember/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+id_rsa*
+credentials*.json
+service-account*.json
+
 .DS_Store
 Thumbs.db
 

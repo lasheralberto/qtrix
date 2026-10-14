@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install engine
+        run: uv sync --directory engine --all-extras
+      - name: Lint
+        run: uv run --directory engine ruff check src tests
+      - name: Tests
+        run: uv run --directory engine pytest
+
+  desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - run: npm --prefix apps/desktop ci
+      - run: npm --prefix apps/desktop run typecheck
+      - run: npm --prefix apps/desktop run build
