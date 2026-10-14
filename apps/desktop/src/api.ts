@@ -138,6 +138,8 @@ export interface CellInfo {
   object?: string | null;
   version?: number | null;
   block_id?: string | null;
+  /** Objects a Python cell registered through its own calls. */
+  objects?: { name: string; version?: number | null }[] | null;
   /** What the agent read in this cell's result, in its own words. */
   finding?: string;
 }
@@ -151,7 +153,7 @@ export interface PlanStep {
 
 /** A note the agent wrote in its workspace: an alternative it weighed, a provisional conclusion or a deliverable. */
 export interface ScratchNote {
-  section: "idea" | "conclusion" | "result";
+  section: "idea" | "conclusion" | "issue" | "result";
   text: string;
 }
 
@@ -177,7 +179,34 @@ export type ChatEvent =
   | ({ type: "context" } & ContextUsage)
   /** The conversation filled the context and was folded into a summary (``before`` = tokens it filled). */
   | ({ type: "compacted"; before: number } & ContextUsage)
+  /** Reporting mode: the ReportingAgent is rewriting the conversation's report after the turn. */
+  | { type: "reporting"; status: "running" | "done" | "error"; version?: number; message?: string }
   | { type: "done" };
+
+/** The conversation's report, written by the ReportingAgent (paper-style: sections that cite objects by name). */
+export interface ReportObjectRef {
+  name: string;
+  view?: string | null;
+  caption: string;
+}
+export interface ReportSection {
+  heading: string;
+  body_md: string;
+  objects: ReportObjectRef[];
+}
+export interface ConversationReport {
+  title: string;
+  abstract: string;
+  sections: ReportSection[];
+  conclusions_md: string;
+  limitations_md: string;
+  next_steps: string[];
+}
+export interface ReportingState {
+  enabled: boolean;
+  version: number;
+  report: ConversationReport | null;
+}
 
 /** How much of the model's context window the conversation fills. */
 export interface ContextUsage {
@@ -357,7 +386,31 @@ export interface MethodArea {
   methods: AnalysisMethod[];
 }
 
+/** A registry tool as the help popup shows it (GET /tools/<name>/help): what it does and the parameters it takes. */
+export interface ToolHelp {
+  name: string;
+  summary: string;
+  qx: string | null;
+  available: boolean;
+  requires: string[];
+  kinds: PageKind[] | null;
+  params: QxParam[];
+}
+
+/** One column of a dataset as profiled by GET /datasets/<id>/profile (numeric stats only for numeric columns). */
+export interface ColumnProfile {
+  name: string;
+  dtype: string;
+  missing: number;
+  unique: number;
+  mean?: number | null;
+  sd?: number | null;
+  min?: number | null;
+  max?: number | null;
+}
+
 export const api = {
+  toolHelp: (name: string) => request<ToolHelp>(`/tools/${encodeURIComponent(name)}/help`),
   health: () => request<{ status: string; version: string; memory: string }>("/health"),
   datasets: () => request<Dataset[]>("/datasets"),
   importPath: (path: string) => request<Dataset>("/datasets/import", json({ path })),
@@ -385,6 +438,11 @@ export const api = {
   testModel: (p: ModelProfile) => request<{ ok: boolean; reply?: string; error?: string }>("/models/test", json(p)),
   history: () => request<ChatTurn[]>("/chat/history"),
   resetChat: () => request("/chat/reset", { method: "POST" }),
+  reporting: () => request<ReportingState>("/reporting"),
+  objectView: (name: string, view?: string | null) =>
+    request<{ kind: BlockKind; title: string; data: Record<string, any> }>(
+      view ? `/objects/${name}/views/${view}` : `/objects/${name}/view`,
+    ),
   chatContext: () => request<ContextUsage>("/chat/context"),
   compactChat: () => request<ContextUsage>("/chat/compact", { method: "POST" }),
   tool: <T = any>(name: string, args: Record<string, unknown>) => request<T>(`/tools/${name}`, json(args)),
@@ -438,6 +496,9 @@ export interface Thread {
   n_blocks: number;
   /** The conversation the engine has open in this notebook. */
   current: boolean;
+  /** Reporting mode: the ReportingAgent keeps the conversation's report up to date. */
+  reporting?: boolean;
+  report_version?: number;
 }
 
 export const threads = {
@@ -446,6 +507,8 @@ export const threads = {
   open: (id: string) => request<Thread>(`/threads/${id}/open`, { method: "POST" }),
   rename: (id: string, title: string) => request<Thread>(`/threads/${id}`, { method: "PATCH", body: JSON.stringify({ title }) }),
   remove: (id: string) => request(`/threads/${id}`, { method: "DELETE" }),
+  setReporting: (id: string, reporting: boolean) =>
+    request<Thread>(`/threads/${id}`, { method: "PATCH", body: JSON.stringify({ reporting }) }),
 };
 
 // ---- local AI: Hugging Face models + embedded llama.cpp ---------------------------------
@@ -568,6 +631,22 @@ export async function* chat(message: string, signal?: AbortSignal): AsyncGenerat
   if (!res.ok || !res.body) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }));
     yield { type: "error", message: detail.detail ?? res.statusText };
+    return;
+  }
+  yield* sse<ChatEvent>(res.body);
+}
+
+/** Write the conversation's report again from every turn (streams ``reporting`` events). */
+export async function* rebuildReporting(signal?: AbortSignal): AsyncGenerator<ChatEvent> {
+  const { baseUrl, token } = await engine();
+  const res = await fetch(baseUrl + route("/reporting/rebuild"), {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-qtrix-token": token },
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    yield { type: "reporting", status: "error", message: detail.detail ?? res.statusText };
     return;
   }
   yield* sse<ChatEvent>(res.body);

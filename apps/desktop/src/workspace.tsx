@@ -10,6 +10,7 @@ import {
   CircleCheck,
   CircleMinus,
   Compass,
+  TriangleAlert,
   FlaskConical,
   Lightbulb,
   ListChecks,
@@ -23,20 +24,23 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { CellInfo, PlanStep } from "./api";
 import { Markdown } from "./blocks";
 import type { Turn } from "./chat";
+import { T } from "./i18n";
 
-type Phase = "running" | "done" | "error" | "idle";
+type Phase = "running" | "done" | "issues" | "error" | "idle";
 
 function phaseOf(turn: Turn): Phase {
   if (turn.running) return "running";
-  if (turn.error || turn.tools.some((c) => c.ok === false)) return "error";
+  if (turn.error) return "error";
+  if (turn.scratch?.notes.some((n) => n.section === "issue")) return "issues";
   return turn.text ? "done" : "idle";
 }
 
 const PHASE_LABEL: Record<Phase, string> = {
-  running: "Trabajando",
-  done: "Completado",
-  error: "Completado con incidencias",
-  idle: "Sin respuesta",
+  running: T("workspace.phaseRunning"),
+  done: T("workspace.phaseDone"),
+  issues: T("workspace.phaseIssues"),
+  error: T("workspace.phaseError"),
+  idle: T("workspace.phaseIdle"),
 };
 
 /** The index of the step in progress: the first pending one while the agent works. */
@@ -112,19 +116,19 @@ export function Workspace(props: {
   const go = (i: number) => props.onSelect(i >= turns.length - 1 ? null : turns[i].key);
 
   return (
-    <aside className={`workspace ${open ? "open" : ""}`} aria-hidden={!open} inert={!open} aria-label="Espacio de trabajo del agente">
+    <aside className={`workspace ${open ? "open" : ""}`} aria-hidden={!open} inert={!open} aria-label={T("workspace.ariaLabel")}>
       <header className="ws-head">
         <div className="ws-head-row">
-          <span className="ws-title">Espacio de trabajo</span>
+          <span className="ws-title">{T("workspace.title")}</span>
           <span className="spacer" />
-          <button className="ghost" title="Turno anterior" disabled={at <= 0} onClick={() => go(at - 1)}>
+          <button className="ghost" title={T("workspace.prevTurn")} disabled={at <= 0} onClick={() => go(at - 1)}>
             <ChevronLeft size={15} />
           </button>
           <span className="ws-pos muted small">{turns.length ? `${at + 1}/${turns.length}` : "—"}</span>
-          <button className="ghost" title="Turno siguiente" disabled={at >= turns.length - 1} onClick={() => go(at + 1)}>
+          <button className="ghost" title={T("workspace.nextTurn")} disabled={at >= turns.length - 1} onClick={() => go(at + 1)}>
             <ChevronRight size={15} />
           </button>
-          <button className="ghost" title="Cerrar (Esc)" onClick={onClose}>
+          <button className="ghost" title={T("workspace.close")} onClick={onClose}>
             <X size={15} />
           </button>
         </div>
@@ -158,7 +162,7 @@ function Status({ turn }: { turn: Turn }) {
         <span className="spacer" />
         {steps.length > 0 && (
           <span className="ws-sub">
-            {settled}/{steps.length} pasos
+            {T("workspace.stepsProgress", { done: settled, total: steps.length })}
           </span>
         )}
       </div>
@@ -173,7 +177,7 @@ function EmptyWorkspace() {
   return (
     <div className="ws-blank">
       <Compass size={22} />
-      <p>Cuando hagas una pregunta, el agente irá anotando aquí su plan, las tareas, el progreso, los hallazgos y los resultados.</p>
+      <p>{T("workspace.emptyHint")}</p>
     </div>
   );
 }
@@ -186,14 +190,26 @@ function TurnWork({ turn, onOpenObject }: { turn: Turn; onOpenObject(name: strin
   const conclusions = notes.filter((n) => n.section === "conclusion");
   const deliverables = notes.filter((n) => n.section === "result");
   const found = turn.tools.filter((c) => c.finding);
+  // Caveats the analyst must keep in mind (failed assumptions, weak identification...); not the agent's own errors.
+  const issues = notes.filter((n) => n.section === "issue");
   // Every object the turn produced, once (the last version it reached).
-  const objects = [...new Map(turn.tools.filter((c) => c.ok && c.object).map((c) => [c.object!, c])).values()];
+  const objects = [
+    ...new Map(
+      turn.tools
+        .filter((c) => c.ok)
+        .flatMap((c) => [
+          ...(c.object ? [{ name: c.object, version: c.version, block_id: c.block_id }] : []),
+          ...(c.objects ?? []).map((o) => ({ name: o.name, version: o.version, block_id: null })),
+        ])
+        .map((o) => [o.name, o]),
+    ).values(),
+  ];
 
   const groups: { key: string; label: string; items: [PlanStep, number][] }[] = [
-    { key: "now", label: "En curso", items: [] },
-    { key: "pending", label: "Pendientes", items: [] },
-    { key: "done", label: "Hechas", items: [] },
-    { key: "skipped", label: "Descartadas", items: [] },
+    { key: "now", label: T("workspace.groupNow"), items: [] },
+    { key: "pending", label: T("workspace.groupPending"), items: [] },
+    { key: "done", label: T("workspace.groupDone"), items: [] },
+    { key: "skipped", label: T("workspace.groupSkipped"), items: [] },
   ];
   steps.forEach((s, i) => {
     const g = i === current ? 0 : s.status === "pending" ? 1 : s.status === "done" ? 2 : 3;
@@ -205,13 +221,13 @@ function TurnWork({ turn, onOpenObject }: { turn: Turn; onOpenObject(name: strin
       <Section
         id="plan"
         icon={<Route size={14} />}
-        title="Planificación"
+        title={T("workspace.planning")}
         count={steps.length || (turn.scratch?.goal ? 1 : 0)}
-        empty={turn.running ? "Preparando el plan…" : "Este turno no necesitó plan."}
+        empty={turn.running ? T("workspace.preparingPlan") : T("workspace.noPlan")}
       >
         {turn.scratch?.goal && (
           <p className="ws-goal">
-            <span className="ws-label">Objetivo</span>
+            <span className="ws-label">{T("workspace.goal")}</span>
             {turn.scratch.goal}
           </p>
         )}
@@ -224,7 +240,7 @@ function TurnWork({ turn, onOpenObject }: { turn: Turn; onOpenObject(name: strin
         )}
       </Section>
 
-      <Section id="tasks" icon={<ListChecks size={14} />} title="Tareas" count={steps.length} empty="Sin tareas en este turno.">
+      <Section id="tasks" icon={<ListChecks size={14} />} title={T("workspace.tasks")} count={steps.length} empty={T("workspace.noTasks")}>
         {groups
           .filter((g) => g.items.length)
           .map((g) => (
@@ -248,9 +264,9 @@ function TurnWork({ turn, onOpenObject }: { turn: Turn; onOpenObject(name: strin
       <Section
         id="progress"
         icon={<FlaskConical size={14} />}
-        title="Progreso"
+        title={T("workspace.progress")}
         count={turn.tools.length}
-        empty={turn.running ? turn.status ?? "Pensando…" : "El agente respondió sin ejecutar acciones."}
+        empty={turn.running ? turn.status ?? T("workspace.thinking") : T("workspace.noActions")}
       >
         <ul className="ws-timeline">
           {turn.tools.map((c) => (
@@ -264,22 +280,32 @@ function TurnWork({ turn, onOpenObject }: { turn: Turn; onOpenObject(name: strin
         )}
       </Section>
 
+      {issues.length > 0 && (
+        <Section id="issues" icon={<TriangleAlert size={14} />} title={T("workspace.issues")} count={issues.length} empty="">
+          {issues.map((n, i) => (
+            <div key={i} className="ws-card issue">
+              {n.text}
+            </div>
+          ))}
+        </Section>
+      )}
+
       <Section
         id="findings"
         icon={<Search size={14} />}
-        title="Hallazgos y conclusiones"
+        title={T("workspace.findings")}
         count={conclusions.length + found.length + (turn.intro ? 1 : 0)}
-        empty="Aún no hay hallazgos."
+        empty={T("workspace.noFindings")}
       >
         {conclusions.map((n, i) => (
           <div key={`c${i}`} className="ws-card conclusion">
-            <span className="ws-label">Conclusión provisional</span>
+            <span className="ws-label">{T("workspace.provisionalConclusion")}</span>
             {n.text}
           </div>
         ))}
         {turn.intro && (
           <div className="ws-card">
-            <span className="ws-label">Punto de partida</span>
+            <span className="ws-label">{T("workspace.startingPoint")}</span>
             <Markdown text={turn.intro} />
           </div>
         )}
@@ -294,7 +320,7 @@ function TurnWork({ turn, onOpenObject }: { turn: Turn; onOpenObject(name: strin
         ))}
       </Section>
 
-      <Section id="ideas" icon={<Lightbulb size={14} />} title="Lluvia de ideas" count={ideas.length} empty="No se plantearon alternativas.">
+      <Section id="ideas" icon={<Lightbulb size={14} />} title={T("workspace.brainstorm")} count={ideas.length} empty={T("workspace.noAlternatives")}>
         <ul className="ws-ideas">
           {ideas.map((n, i) => {
             const cut = n.text.indexOf(":");
@@ -317,9 +343,9 @@ function TurnWork({ turn, onOpenObject }: { turn: Turn; onOpenObject(name: strin
       <Section
         id="results"
         icon={<Package size={14} />}
-        title="Resultados"
+        title={T("workspace.results")}
         count={objects.length + deliverables.length}
-        empty={turn.running ? "Todavía sin resultados." : "Este turno no produjo objetos."}
+        empty={turn.running ? T("workspace.noResultsYet") : T("workspace.noObjects")}
       >
         {deliverables.map((n, i) => (
           <div key={`r${i}`} className="ws-card result">
@@ -328,11 +354,11 @@ function TurnWork({ turn, onOpenObject }: { turn: Turn; onOpenObject(name: strin
         ))}
         {objects.length > 0 && (
           <div className="ws-objects">
-            {objects.map((c) => (
-              <button key={c.object!} className="ws-object" onClick={() => onOpenObject(c.object!, c.block_id)} title="Abrir en el panel">
+            {objects.map((o) => (
+              <button key={o.name} className="ws-object" onClick={() => onOpenObject(o.name, o.block_id)} title={T("workspace.openInPanel")}>
                 <Package size={12} />
-                {c.object}
-                {c.version != null && <span className="muted">v{c.version}</span>}
+                {o.name}
+                {o.version != null && <span className="muted">v{o.version}</span>}
               </button>
             ))}
           </div>

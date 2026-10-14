@@ -2,6 +2,7 @@
 import { MessageSquare, MoreHorizontal, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Thread } from "./api";
+import { T } from "./i18n";
 import { EditableTitle, type MenuAt, RowMenu, ago, menuAt } from "./notebooks";
 
 const meta = (t: Thread) => ago(t.updated_at);
@@ -40,12 +41,12 @@ export function ThreadList(props: {
     <div className="notebooks threads">
       <div className="side-title">
         <span>
-          Conversaciones <span className="count">{props.threads.length}</span>
+          {T("threads.heading")} <span className="count">{props.threads.length}</span>
         </span>
         <button
           className="ghost"
-          title={props.locked ? "Espera a que termine el turno en curso" : "Nueva conversación (mismos datos)"}
-          aria-label="Nueva conversación"
+          title={props.locked ? T("threads.waitForTurn") : T("threads.newSameData")}
+          aria-label={T("threads.new")}
           disabled={props.locked}
           onClick={props.onCreate}
         >
@@ -58,7 +59,7 @@ export function ThreadList(props: {
           if (confirming === t.id)
             return (
               <li key={t.id} className="nb-confirm">
-                <span>¿Borrar «{t.title}»? Los datasets y objetos del cuaderno se conservan.</span>
+                <span>{T("threads.confirmDelete", { title: t.title })}</span>
                 <span className="nb-confirm-actions">
                   <button
                     className="danger"
@@ -67,10 +68,10 @@ export function ThreadList(props: {
                       props.onDelete(t.id);
                     }}
                   >
-                    <Trash2 size={13} /> Borrar
+                    <Trash2 size={13} /> {T("threads.delete")}
                   </button>
                   <button className="ghost" onClick={() => setConfirming(null)}>
-                    <X size={13} /> Cancelar
+                    <X size={13} /> {T("threads.cancel")}
                   </button>
                 </span>
               </li>
@@ -93,7 +94,7 @@ export function ThreadList(props: {
                   className="nb-item"
                   aria-current={active}
                   disabled={props.locked && !active}
-                  title={props.locked && !active ? "Espera a que termine el turno en curso" : t.title}
+                  title={props.locked && !active ? T("threads.waitForTurn") : t.title}
                   onClick={() => props.onSelect(t.id)}
                 >
                   <MessageSquare size={14} />
@@ -105,7 +106,7 @@ export function ThreadList(props: {
               )}
               <button
                 className="ghost nb-more"
-                aria-label={`Acciones de ${t.title}`}
+                aria-label={T("threads.actionsFor", { title: t.title })}
                 aria-haspopup="menu"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -124,19 +125,19 @@ export function ThreadList(props: {
                       setMenu(null);
                     }}
                   >
-                    <Pencil size={13} /> Renombrar
+                    <Pencil size={13} /> {T("threads.rename")}
                   </button>
                   <button
                     role="menuitem"
                     className="danger"
                     disabled={last}
-                    title={last ? "Un cuaderno necesita al menos una conversación" : undefined}
+                    title={last ? T("threads.lastOne") : undefined}
                     onClick={() => {
                       setConfirming(t.id);
                       setMenu(null);
                     }}
                   >
-                    <Trash2 size={13} /> Borrar
+                    <Trash2 size={13} /> {T("threads.delete")}
                   </button>
                 </RowMenu>
               )}

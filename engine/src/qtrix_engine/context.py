@@ -29,11 +29,15 @@ class Thread:
     chat: Any = None  # agents.lead.ChatSession, set by the engine
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+    reporting: bool = False  # reporting mode: the ReportingAgent rewrites ``report`` after every turn
+    report: dict[str, Any] | None = None  # agents.reporting.ConversationReport as a dict
+    report_version: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         turns = sum(1 for m in self.chat.transcript if m.get("role") == "user") if self.chat is not None else 0
         return {"id": self.id, "title": self.title, "created_at": self.created_at, "updated_at": self.updated_at,
-                "n_turns": turns, "n_blocks": len(self.panel.blocks())}
+                "n_turns": turns, "n_blocks": len(self.panel.blocks()), "reporting": self.reporting,
+                "report_version": self.report_version}
 
 
 @dataclass

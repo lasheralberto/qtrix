@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from ..context import get_context
-from ..panel import Block
+from ..objects.views import add_artifact
 from ._format import clean, df_block_data
 from .registry import Qx, tool
 
@@ -120,11 +120,9 @@ def data_summary_stats(dataset_id: str, columns: list[str] | None = None, show_i
     desc = desc.round(4)
     if show_in_panel:
         cols = f", columns={columns!r}" if columns else ""
-        ctx.panel.add(Block(
-            kind="dataframe", title=f"Descriptive statistics · {info.name}",
-            data=df_block_data(desc.reset_index(names="variable")),
-            code=f"df = qtrix.load({info.name!r}{cols})\ndf.describe().T",
-        ))
+        add_artifact("dataframe", f"Descriptive statistics · {info.name}",
+                     df_block_data(desc.reset_index(names="variable")),
+                     f"df = qtrix.load({info.name!r}{cols})\ndf.describe().T")
     return clean(desc.to_dict(orient="index"))
 
 
@@ -143,8 +141,8 @@ def data_correlation(dataset_id: str, columns: list[str] | None = None,
     corr = (ctx.workspace.df(dataset_id, columns, sample=sample).select_dtypes("number")
             .corr(method=method).round(3))
     fig = px.imshow(corr, text_auto=True, color_continuous_scale="RdBu_r", zmin=-1, zmax=1)
-    ctx.panel.add(Block(kind="plotly_figure", title=f"{method.title()} correlations · {info.name}",
-                        data=figure_data(fig), code=f"df.corr(method={method!r})"))
+    add_artifact("plotly_figure", f"{method.title()} correlations · {info.name}", figure_data(fig),
+                 f"df.corr(method={method!r})")
     return clean(corr.to_dict())
 
 
@@ -156,7 +154,7 @@ def data_preview(dataset_id: str, limit: int = 20, show_in_panel: bool = False) 
     df = ctx.workspace.preview(dataset_id, limit=min(limit, 500))
     data = df_block_data(df)
     if show_in_panel:
-        ctx.panel.add(Block(kind="dataframe", title=f"{info.name} (first {len(df)} rows)", data=data))
+        add_artifact("dataframe", f"{info.name} (first {len(df)} rows)", data)
     return {"columns": data["columns"], "rows": data["rows"][:20]}
 
 
@@ -176,8 +174,7 @@ def data_sql(query: str, save_as: str | None = None, show_in_panel: bool = True)
         info = ctx.workspace.add_dataframe(df, save_as, source="sql")
         out["dataset_id"] = info.id
     if show_in_panel:
-        ctx.panel.add(Block(kind="dataframe", title=save_as or "SQL result", data=df_block_data(df),
-                            code=f"qtrix.sql({query!r})"))
+        add_artifact("dataframe", save_as or "SQL result", df_block_data(df), f"qtrix.sql({query!r})")
     out["head"] = clean(df.head(10).to_dict(orient="records"))
     return out
 

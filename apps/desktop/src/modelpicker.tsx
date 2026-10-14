@@ -4,11 +4,12 @@
 import { Boxes, Check, ChevronDown, Cloud, HardDrive, KeyRound, LifeBuoy, LoaderCircle, Plus, Search, Settings, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, type ModelProfile, type UserSettings } from "./api";
+import { T } from "./i18n";
 
 type Provider = ModelProfile["provider"];
 
 export const PROVIDERS: { id: Provider; label: string; local: boolean; example: string }[] = [
-  { id: "llamacpp", label: "qtrix · llama.cpp", local: true, example: "descarga uno en Modelos locales" },
+  { id: "llamacpp", label: "qtrix · llama.cpp", local: true, example: T("modelpicker.exampleLlamacpp") },
   { id: "ollama", label: "Ollama", local: true, example: "qwen3:8b" },
   { id: "lmstudio", label: "LM Studio", local: true, example: "qwen2.5-7b-instruct" },
   { id: "openai_compatible", label: "OpenAI-compatible (vLLM, llama.cpp…)", local: true, example: "model-name" },
@@ -150,12 +151,12 @@ export function ModelPicker({
           <span className="mp-check">{isActive && <Check size={13} />}</span>
           <span className="mp-runtime">{SHORT[o.provider]}</span>
           <span className="mp-name">{shortModel(o.provider, o.model)}</span>
-          {!o.detected && <span className="pill">guardado</span>}
+          {!o.detected && <span className="pill">{T("modelpicker.saved")}</span>}
         </button>
         {!isActive && (
           <button
             className={`ghost mp-fb ${fb >= 0 ? "on" : ""}`}
-            title={fb >= 0 ? `Respaldo nº ${fb + 1}: se usa si el activo falla. Clic para quitar.` : "Usar como respaldo si el activo falla"}
+            title={fb >= 0 ? T("modelpicker.fallbackNth", { n: fb + 1 }) : T("modelpicker.fallbackUse")}
             onClick={() => toggleFallback(o)}
           >
             <LifeBuoy size={13} />
@@ -163,7 +164,7 @@ export function ModelPicker({
           </button>
         )}
         {!o.detected && !isActive && (
-          <button className="ghost" title="Olvidar" onClick={() => forget(o)}>
+          <button className="ghost" title={T("modelpicker.forget")} onClick={() => forget(o)}>
             <Trash2 size={13} />
           </button>
         )}
@@ -178,13 +179,13 @@ export function ModelPicker({
 
   return (
     <div className="mp" ref={root}>
-      <button className={`mp-trigger ${isLocal ? "local" : "cloud"}`} onClick={() => setOpen((v) => !v)} title="Elegir modelo">
+      <button className={`mp-trigger ${isLocal ? "local" : "cloud"}`} onClick={() => setOpen((v) => !v)} title={T("modelpicker.choose")}>
         {isLocal ? <HardDrive size={13} /> : <Cloud size={13} />}
         <span className="mp-trigger-name">
-          {active ? `${SHORT[active.provider]} · ${shortModel(active.provider, active.model) || "sin modelo"}` : "Elegir modelo"}
+          {active ? `${SHORT[active.provider]} · ${shortModel(active.provider, active.model) || T("modelpicker.noModel")}` : T("modelpicker.choose")}
         </span>
         {fallbacks.length > 0 && (
-          <span className="mp-trigger-fb" title={`Respaldo: ${fallbacks.join(" → ")}`}>
+          <span className="mp-trigger-fb" title={T("modelpicker.fallbackChain", { chain: fallbacks.join(" → ") })}>
             <LifeBuoy size={11} /> {fallbacks.length}
           </span>
         )}
@@ -195,44 +196,44 @@ export function ModelPicker({
         <div className="mp-pop">
           <div className="mp-search">
             {loading ? <LoaderCircle size={13} className="spin muted" /> : <Search size={13} className="muted" />}
-            <input autoFocus value={query} placeholder="Buscar modelo…" onChange={(e) => setQuery(e.target.value)} />
+            <input autoFocus value={query} placeholder={T("modelpicker.search")} onChange={(e) => setQuery(e.target.value)} />
           </div>
 
           <div className="mp-scroll">
             <h4>
-              <HardDrive size={12} /> En este equipo
+              <HardDrive size={12} /> {T("modelpicker.onDevice")}
             </h4>
             {localOptions.length > 0 ? (
               <ul>{localOptions.map(row)}</ul>
             ) : (
               <p className="mp-empty">
-                {q ? "Sin coincidencias." : "No hay modelos locales instalados."}{" "}
+                {q ? T("modelpicker.noMatches") : T("modelpicker.noLocal")}{" "}
                 <button className="link" onClick={go(onOpenModels)}>
-                  Descargar uno
+                  {T("modelpicker.downloadOne")}
                 </button>
               </p>
             )}
 
             <h4>
-              <Cloud size={12} /> Nube
+              <Cloud size={12} /> {T("modelpicker.cloud")}
             </h4>
             {s.local_only ? (
               <p className="mp-empty">
-                Modo «solo local» activo: ningún prompt sale de esta máquina.{" "}
+                {T("modelpicker.localOnlyNotice")}{" "}
                 {!s.forced_local_only && (
                   <button className="link" onClick={go(onOpenSettings)}>
-                    Cambiar en Ajustes
+                    {T("modelpicker.changeInSettings")}
                   </button>
                 )}
               </p>
             ) : (
               <>
-                {cloudOptions.length > 0 ? <ul>{cloudOptions.map(row)}</ul> : q && <p className="mp-empty">Sin coincidencias.</p>}
+                {cloudOptions.length > 0 ? <ul>{cloudOptions.map(row)}</ul> : q && <p className="mp-empty">{T("modelpicker.noMatches")}</p>}
                 {missingKeys.length > 0 && !q && (
                   <p className="mp-empty">
-                    <KeyRound size={12} /> Sin API key: {missingKeys.map((p) => SHORT[p]).join(", ")}.{" "}
+                    <KeyRound size={12} /> {T("modelpicker.missingKeys", { providers: missingKeys.map((p) => SHORT[p]).join(", ") })}{" "}
                     <button className="link" onClick={go(onOpenSettings)}>
-                      Añadir clave
+                      {T("modelpicker.addKey")}
                     </button>
                   </p>
                 )}
@@ -268,16 +269,16 @@ export function ModelPicker({
                 )}
                 <div className="row">
                   <button type="submit" className="primary" disabled={!custom.model.trim()}>
-                    Usar
+                    {T("modelpicker.use")}
                   </button>
                   <button type="button" className="ghost" onClick={() => setCustom(null)}>
-                    Cancelar
+                    {T("modelpicker.cancel")}
                   </button>
                 </div>
               </form>
             ) : (
               <button className="ghost mp-add" onClick={() => setCustom({ provider: "openai_compatible", model: "", base_url: "" })}>
-                <Plus size={13} /> Otro modelo o endpoint…
+                <Plus size={13} /> {T("modelpicker.other")}
               </button>
             )}
           </div>
@@ -285,21 +286,21 @@ export function ModelPicker({
           <footer className="mp-foot">
             <button
               className="ghost"
-              disabled={!active || test === "Probando…"}
+              disabled={!active || test === T("modelpicker.testing")}
               onClick={async () => {
-                setTest("Probando…");
+                setTest(T("modelpicker.testing"));
                 const r = await api.testModel(active);
-                setTest(r.ok ? `✓ responde: ${r.reply}` : `✗ ${r.error}`);
+                setTest(r.ok ? `✓ ${T("modelpicker.replies", { reply: r.reply ?? "" })}` : `✗ ${r.error}`);
               }}
             >
-              Probar
+              {T("modelpicker.test")}
             </button>
             <span className="spacer" />
             <button className="ghost" onClick={go(onOpenModels)}>
-              <Boxes size={13} /> Modelos locales
+              <Boxes size={13} /> {T("modelpicker.localModels")}
             </button>
             <button className="ghost" onClick={go(onOpenSettings)}>
-              <Settings size={13} /> API keys
+              <Settings size={13} /> {T("modelpicker.apiKeys")}
             </button>
           </footer>
           {test && <p className={`mp-test small ${test.startsWith("✗") ? "bad" : ""}`}>{test}</p>}

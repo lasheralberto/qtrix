@@ -16,6 +16,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { T } from "./i18n";
 import { api, type AnalysisMethod, type Dataset, type MethodArea, type PageKind } from "./api";
 
 const AREA_ICON: Record<string, LucideIcon> = {
@@ -29,10 +30,10 @@ const AREA_ICON: Record<string, LucideIcon> = {
 };
 
 const KIND_LABEL: Record<PageKind, string> = {
-  cross_section: "corte transversal",
-  time_series: "serie temporal",
-  panel: "panel",
-  panel_undated: "panel",
+  cross_section: T("methods.kindCrossSection"),
+  time_series: T("methods.kindTimeSeries"),
+  panel: T("methods.kindPanel"),
+  panel_undated: T("methods.kindPanel"),
 };
 
 /** The method catalog, fetched once; null while it loads (or if the engine is unreachable). */
@@ -47,8 +48,8 @@ export function useMethods(): MethodArea[] | null {
 /** The areas as a grid of cards for the empty conversation: a glance at what qtrix can do. */
 export function MethodAreas({ areas, onOpen }: { areas: MethodArea[]; onOpen(areaId: string): void }) {
   return (
-    <section className="method-areas" aria-label="Métodos disponibles">
-      <h3>Qué puedes pedirle al equipo</h3>
+    <section className="method-areas" aria-label={T("methods.available")}>
+      <h3>{T("methods.whatToAsk")}</h3>
       <div className="method-area-grid">
         {areas.map((a) => {
           const Icon = AREA_ICON[a.id] ?? LibraryBig;
@@ -71,7 +72,7 @@ function requirement(m: AnalysisMethod, kinds: Set<PageKind>): { text: string; u
   if (!m.structures) return null;
   const labels = [...new Set(m.structures.map((k) => KIND_LABEL[k]))];
   const unmet = kinds.size > 0 && !m.structures.some((k) => kinds.has(k));
-  return { text: `Requiere datos de ${labels.join(" o ")}`, unmet };
+  return { text: T("methods.requires", { kinds: labels.join(T("methods.or")) }), unmet };
 }
 
 function matches(m: AnalysisMethod, area: MethodArea, q: string): boolean {
@@ -90,7 +91,7 @@ function MethodCard({ method, kinds, onUse }: { method: AnalysisMethod; kinds: S
         <div className="method-title">
           <strong>{method.label}</strong>
           {method.library.length > 0 && (
-            <span className="method-tag" title={`Librería causal en una celda de Python: ${method.library.join(", ")}`}>
+            <span className="method-tag" title={T("methods.pythonLibrary", { libs: method.library.join(", ") })}>
               Python
             </span>
           )}
@@ -106,16 +107,16 @@ function MethodCard({ method, kinds, onUse }: { method: AnalysisMethod; kinds: S
         {req && (
           <p className={`method-req small ${req.unmet ? "unmet" : ""}`}>
             {req.text}
-            {req.unmet && " · ningún dataset cargado lo es"}
+            {req.unmet && T("methods.noDatasetMatches")}
           </p>
         )}
-        {!method.available && <p className="method-req unmet small">No disponible: falta {method.missing.join(", ")}</p>}
-        <code className="method-tools" title="Herramientas del motor">
+        {!method.available && <p className="method-req unmet small">{T("methods.unavailable", { missing: method.missing.join(", ") })}</p>}
+        <code className="method-tools" title={T("methods.engineTools")}>
           {method.tools.join(" · ")}
         </code>
       </div>
       <button className="method-use" disabled={!method.available} onClick={onUse} title={method.prompt}>
-        Preguntar <ArrowRight size={13} />
+        {T("methods.ask")} <ArrowRight size={13} />
       </button>
     </article>
   );
@@ -153,26 +154,26 @@ export function MethodsModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal wide methods-modal" role="dialog" aria-label="Métodos de análisis" onClick={(e) => e.stopPropagation()}>
+      <div className="modal wide methods-modal" role="dialog" aria-label={T("methods.title")} onClick={(e) => e.stopPropagation()}>
         <header>
           <LibraryBig size={17} />
-          <h2>Métodos de análisis</h2>
-          <span className="muted small">{total} métodos</span>
+          <h2>{T("methods.title")}</h2>
+          <span className="muted small">{T("methods.count", { count: total })}</span>
           <label className="method-search">
             <Search size={14} />
             <input
               autoFocus
               value={query}
-              placeholder="Buscar: hausman, garch, instrumentos…"
+              placeholder={T("methods.searchPlaceholder")}
               onChange={(e) => setQuery(e.target.value)}
             />
           </label>
-          <button className="ghost" title="Cerrar" onClick={onClose}>
+          <button className="ghost" title={T("methods.close")} onClick={onClose}>
             <X size={16} />
           </button>
         </header>
         <div className="methods-body">
-          <nav className="methods-nav" aria-label="Áreas">
+          <nav className="methods-nav" aria-label={T("methods.areas")}>
             {areas.map((a) => {
               const Icon = AREA_ICON[a.id] ?? LibraryBig;
               return (
@@ -191,7 +192,7 @@ export function MethodsModal({
             })}
           </nav>
           <div className="methods-list">
-            {shown.length === 0 && <p className="muted">Ningún método coincide con «{q}».</p>}
+            {shown.length === 0 && <p className="muted">{T("methods.noMatch", { query: q })}</p>}
             {shown.map((a) => (
               <section key={a.id}>
                 <h3>{a.label}</h3>

@@ -1,7 +1,7 @@
 // Workbench layout: notebooks, their conversations and their data in the rail · one analysis panel where the
 // conversation and its results live together (E7·08c). The panel shows one conversation of the active notebook; every
 // conversation of a notebook works on its datasets and objects (E8·04).
-import { Eraser, LibraryBig, MessageSquarePlus, PanelLeft, PanelRight, Redo2, Settings, Sparkles, Undo2 } from "lucide-react";
+import { Eraser, LibraryBig, PanelLeft, PanelRight, Redo2, Settings, Sparkles, Undo2 } from "lucide-react";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   api,
@@ -21,10 +21,12 @@ import { BlockCard } from "./blocks";
 import { Composer, ContextMeter, SUGGESTIONS, TurnAnswer, TurnHead, useChat, type ComposerHandle, type Turn } from "./chat";
 import { DatasetList, DatasetModal } from "./data";
 import { MethodAreas, MethodsModal, useMethods } from "./methods";
+import { T } from "./i18n";
 import { ModelPicker } from "./modelpicker";
 import { ModelsModal } from "./models";
 import { DraftCell, NotebookRibbon, type Draft } from "./notebook";
 import { EditableTitle, NotebookList, UNTITLED } from "./notebooks";
+import { ReportDocument, ReportingToggle, useReporting } from "./reporting";
 import { SettingsModal } from "./settings";
 import { ThreadList } from "./threads";
 import { Workspace } from "./workspace";
@@ -89,11 +91,23 @@ export default function App() {
   blocksRef.current = blocks;
   const lastBlock = useCallback(() => blocksRef.current[blocksRef.current.length - 1]?.id ?? null, []);
   const conversation = activeId && threadId ? `${activeId}/${threadId}` : null;
-  const { turns, busy, send, stop, reset, context, compacting, compact, refreshContext } = useChat(lastBlock, conversation);
+  const reportingEvent = useRef<(ev: Parameters<ReturnType<typeof useReporting>["handleEvent"]>[0]) => void>(() => {});
+  const { turns, busy, send, stop, reset, context, compacting, compact, refreshContext } = useChat(
+    lastBlock,
+    conversation,
+    (ev) => reportingEvent.current(ev),
+  );
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeId;
   const active = notebooks.find((n) => n.id === activeId) ?? null;
   const thread = threads.find((t) => t.id === threadId) ?? null;
+  // Reporting mode: the report of this conversation, rewritten after each turn; the document opens over the panel.
+  const refreshThreadsRef = useRef<() => void>(() => {});
+  const reporting = useReporting(conversation, threadId, () => refreshThreadsRef.current());
+  reportingEvent.current = reporting.handleEvent;
+  const [reportOpen, setReportOpen] = useState(false);
+  useEffect(() => setReportOpen(false), [conversation]);
+  const closeReport = useCallback(() => setReportOpen(false), []);
 
   const refreshNotebooks = useCallback(() => notebookApi.list().then(setNotebooks).catch(() => {}), []);
   const refreshDatasets = useCallback(() => {
@@ -140,6 +154,7 @@ export default function App() {
       .then((list) => activeRef.current === id && setThreads(list))
       .catch(() => {});
   }, [activeId]);
+  refreshThreadsRef.current = refreshThreads;
 
   // The conversations of the notebook: the panel opens on the one the engine has open in it.
   useEffect(() => {
@@ -277,7 +292,7 @@ export default function App() {
   const duplicateNotebook = (id: string) =>
     notebookApi
       .duplicate(id)
-      .then((nb) => (refreshNotebooks(), notify(`Duplicado como «${nb.title}»`)))
+      .then((nb) => (refreshNotebooks(), notify(T("app.duplicatedAs", { title: nb.title }))))
       .catch(fail);
 
   const selectThread = async (id: string) => {
@@ -307,7 +322,7 @@ export default function App() {
   const renameThread = (id: string, title: string) => threadApi.rename(id, title).then(refreshThreads).catch(fail);
 
   const deleteThread = async (id: string) => {
-    if (busy && id === threadId) return notify("Espera a que termine el turno en curso");
+    if (busy && id === threadId) return notify(T("app.waitForTurn"));
     try {
       await threadApi.remove(id);
       const list = await threadApi.list();
@@ -319,7 +334,7 @@ export default function App() {
   };
 
   const deleteNotebook = async (id: string) => {
-    if (busy && id === activeId) return notify("Espera a que termine el turno en curso");
+    if (busy && id === activeId) return notify(T("app.waitForTurn"));
     try {
       await notebookApi.remove(id);
       const list = await notebookApi.list();
@@ -371,7 +386,7 @@ export default function App() {
       onPin={(p) => api.pin(b.id, p).catch((e) => notify(e.message))}
       onRemove={() => api.removeBlock(b.id).catch((e) => notify(e.message))}
       onAsk={ask}
-      onAskAbout={() => composer.current?.focus(`Sobre el bloque ${i + 1} («${b.title}»): `)}
+      onAskAbout={() => composer.current?.focus(T("app.aboutBlock", { n: i + 1, title: b.title }))}
       onFreeze={() => api.freezeBlock(b.id).catch((e) => notify(e.message))}
     />
   );
@@ -405,15 +420,15 @@ export default function App() {
 
   return (
     <div className={`app ${wsOpen ? "ws-open" : ""} ${railOpen ? "rail-open" : ""}`}>
-      <aside className={`rail ${railOpen ? "open" : ""}`} aria-hidden={!railOpen} inert={!railOpen} aria-label="Cuadernos y datos">
+      <aside className={`rail ${railOpen ? "open" : ""}`} aria-hidden={!railOpen} inert={!railOpen} aria-label={T("app.notebooksAndData")}>
         <div className="brand">
-          <img className="logo" src="./brand/qtrix-mark.png" alt="qtrix" />
+          <img className="logo" src="./brand/qtrix-mark.png" alt={T("app.brand")} />
           <div>
-            <strong>qtrix</strong>
-            <span className="muted small">econometría agéntica local</span>
+            <strong>{T("app.brand")}</strong>
+            <span className="muted small">{T("app.tagline")}</span>
           </div>
           <span className="spacer" />
-          <button className="ghost" title="Ocultar el panel" onClick={toggleRail}>
+          <button className="ghost" title={T("app.hidePanel")} onClick={toggleRail}>
             <PanelLeft size={15} />
           </button>
         </div>
@@ -440,11 +455,11 @@ export default function App() {
         <div className="rail-foot">
           {methods && (
             <button className="ghost wide" onClick={() => setMethodsArea(null)}>
-              <LibraryBig size={15} /> Métodos
+              <LibraryBig size={15} /> {T("app.methods")}
             </button>
           )}
           <button className="ghost wide" onClick={() => setShowSettings(true)}>
-            <Settings size={15} /> Ajustes
+            <Settings size={15} /> {T("app.settings")}
           </button>
         </div>
       </aside>
@@ -452,35 +467,27 @@ export default function App() {
       <main className="panel">
         <header className="panel-head">
           {!railOpen && (
-            <button className="ghost rail-toggle" title="Mostrar cuadernos y datos" aria-pressed={false} onClick={toggleRail}>
+            <button className="ghost rail-toggle" title={T("app.showNotebooksAndData")} aria-pressed={false} onClick={toggleRail}>
               <PanelLeft size={16} />
             </button>
           )}
           <div className="panel-title">
-            {active ? <EditableTitle value={active.title} onSave={(t) => renameNotebook(active.id, t)} /> : <h1>qtrix</h1>}
+            {active ? <EditableTitle value={active.title} onSave={(t) => renameNotebook(active.id, t)} /> : <h1>{T("app.brand")}</h1>}
             <span className="muted small">
               {thread && threads.length > 1 && <span className="thread-crumb">{thread.title} · </span>}
-              {blocks.length} bloques · v{version}
+              {T(blocks.length === 1 ? "app.blocksVersion.one" : "app.blocksVersion.other", { count: blocks.length, version })}
               {busy && (
                 <span className="working">
-                  <Sparkles size={12} /> el equipo está trabajando…
+                  <Sparkles size={12} /> {T("app.teamWorking")}
                 </span>
               )}
             </span>
           </div>
           <div className="panel-tools">
-            <button
-              className="ghost"
-              title={busy ? "Espera a que termine el turno en curso" : "Nueva conversación sobre los mismos datos"}
-              aria-label="Nueva conversación"
-              disabled={busy}
-              onClick={createThread}
-            >
-              <MessageSquarePlus size={16} />
-            </button>
+            <ReportingToggle reporting={reporting} disabled={busy} onOpen={() => setReportOpen(true)} />
             <button
               className={`ghost ws-toggle ${wsOpen ? "on" : ""} ${busy ? "live" : ""}`}
-              title={wsOpen ? "Ocultar el espacio de trabajo" : "Espacio de trabajo del agente"}
+              title={wsOpen ? T("app.hideWorkspace") : T("app.agentWorkspace")}
               aria-pressed={wsOpen}
               onClick={() => (wsOpen ? setWsOpen(false) : openWorkspace(wsTurn))}
             >
@@ -489,14 +496,14 @@ export default function App() {
             </button>
           </div>
         </header>
-        <NotebookRibbon draft={draft} onAdd={setDraft} onAskAI={() => composer.current?.focus()}>
-          <button className="ghost" title="Deshacer" onClick={() => api.undo()}>
+        <NotebookRibbon draft={draft} onAdd={setDraft}>
+          <button className="ghost" title={T("app.undo")} onClick={() => api.undo()}>
             <Undo2 size={15} />
           </button>
-          <button className="ghost" title="Rehacer" onClick={() => api.redo()}>
+          <button className="ghost" title={T("app.redo")} onClick={() => api.redo()}>
             <Redo2 size={15} />
           </button>
-          <button className="ghost" title="Limpiar (conserva fijados)" onClick={() => api.clear()}>
+          <button className="ghost" title={T("app.clearKeepPinned")} onClick={() => api.clear()}>
             <Eraser size={15} />
           </button>
         </NotebookRibbon>
@@ -510,13 +517,9 @@ export default function App() {
         >
           {blocks.length === 0 && turns.length === 0 && (
             <div className="panel-empty">
-              <img className="empty-logo" src="./brand/qtrix-logo.png" alt="qtrix" />
-              <h2>{threads.length > 1 ? "Una conversación nueva sobre los mismos datos" : "El cuaderno se construye mientras conversas"}</h2>
-              <p>
-                Importa un dataset a la izquierda y pregunta abajo en lenguaje natural. El agente elegirá estimadores, ejecutará los
-                modelos en tu máquina y sus tablas, contrastes y gráficos aparecerán aquí. Cada acción del agente es una celda de Python
-                que puedes editar y re-ejecutar.
-              </p>
+              <img className="empty-logo" src="./brand/qtrix-logo.png" alt={T("app.brand")} />
+              <h2>{T(threads.length > 1 ? "app.emptyTitleNewThread" : "app.emptyTitle")}</h2>
+              <p>{T("app.emptyBody")}</p>
               <div className="suggestions">
                 {SUGGESTIONS.map((s) => (
                   <button key={s} className="suggestion" onClick={() => ask(s)}>
@@ -564,6 +567,15 @@ export default function App() {
         onClose={closeWorkspace}
         onOpenObject={openObject}
       />
+
+      {reportOpen && reporting.enabled && (
+        <ReportDocument
+          reporting={reporting}
+          title={thread?.title ?? T("app.conversation")}
+          notebook={active?.title ?? T("app.brand")}
+          onClose={closeReport}
+        />
+      )}
 
       {openDataset && (
         <DatasetModal

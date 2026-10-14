@@ -354,6 +354,19 @@ def _family_signatures(family: str) -> list[dict[str, Any]]:
     return out
 
 
+def tool_help(name: str) -> dict[str, Any] | None:
+    """What a registry tool is and takes (its own parameters, not the ``qx`` keywords), for the composer's help."""
+    spec = get_tool(name)
+    if spec is None:
+        return None
+    summary, docs = _doc_parts(spec.description)
+    items = [_param(name, p, k, docs) for k, p in params(name).items()
+             if p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)]
+    kinds = sorted(spec.kinds) if spec.kinds is not None else None
+    return {"name": name, "summary": summary, "qx": str(spec.qx) if spec.qx else None,
+            "available": spec.available, "requires": list(spec.requires), "kinds": kinds, "params": items}
+
+
 @cache
 def signatures() -> dict[str, dict[str, Any]]:
     """``"<target>.<function>"`` → its ``qx`` signatures (several for a family), for the editor's signature help."""

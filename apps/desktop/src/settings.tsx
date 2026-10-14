@@ -4,6 +4,7 @@ import { Activity, Brain, Cloud, FolderOpen, FolderSync, HardDrive, KeyRound, Sh
 import { useEffect, useState } from "react";
 import { api, formatBytes, localai, type LlmUsage, type SystemInfo, type UserSettings } from "./api";
 import { PROVIDERS } from "./modelpicker";
+import { T } from "./i18n";
 
 /** Choices for the cap on the conversation's context (tokens). */
 const CONTEXT_PRESETS = [16_000, 32_000, 64_000, 128_000, 200_000, 500_000, 1_000_000];
@@ -18,10 +19,10 @@ function UsageSection() {
   return (
     <section>
       <h3>
-        <Activity size={15} /> Uso de modelos
+        <Activity size={15} /> {T("settings.usage")}
       </h3>
       {rows.length === 0 ? (
-        <p className="muted small">Aún no hay llamadas registradas.</p>
+        <p className="muted small">{T("settings.noCalls")}</p>
       ) : (
         <table className="folder-table">
           <tbody>
@@ -30,19 +31,19 @@ function UsageSection() {
                 <td>
                   <code>{model}</code>
                 </td>
-                <td className="num small">{m.calls} llamadas</td>
-                <td className="num small">{(m.prompt_tokens + m.completion_tokens).toLocaleString()} tokens</td>
-                <td className="num small" title={m.unpriced_calls ? `${m.unpriced_calls} llamadas sin precio conocido` : undefined}>
+                <td className="num small">{T("settings.calls", { count: m.calls })}</td>
+                <td className="num small">{T("settings.tokens", { count: (m.prompt_tokens + m.completion_tokens).toLocaleString() })}</td>
+                <td className="num small" title={m.unpriced_calls ? T("settings.unpriced", { count: m.unpriced_calls }) : undefined}>
                   {m.cost_usd > 0 ? `$${m.cost_usd.toFixed(4)}` : "—"}
                   {m.unpriced_calls > 0 && m.cost_usd > 0 ? "+" : ""}
                 </td>
-                <td className="muted small">{m.fallbacks ? `${m.fallbacks} como respaldo` : ""}</td>
+                <td className="muted small">{m.fallbacks ? T("settings.asFallback", { count: m.fallbacks }) : ""}</td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
-      <p className="muted small">Todas las llamadas pasan por el gateway LiteLLM del motor (también en /llm/v1, compatible con OpenAI).</p>
+      <p className="muted small">{T("settings.gatewayNote")}</p>
     </section>
   );
 }
@@ -65,14 +66,14 @@ function FolderSection() {
     setError("");
     const res = await bridge.setHome(target, move); // the engine restarts and the window reloads
     setBusy(false);
-    if (!res.ok) setError(res.error ?? "No se pudo cambiar la carpeta");
+    if (!res.ok) setError(res.error ?? T("settings.folderChangeFailed"));
     setTarget(null);
   }
 
   return (
     <section>
       <h3>
-        <HardDrive size={15} /> Carpeta de qtrix
+        <HardDrive size={15} /> {T("settings.folder")}
       </h3>
       <div className="row">
         <code className="home-path">{info?.home ?? "…"}</code>
@@ -80,32 +81,32 @@ function FolderSection() {
         <span className="spacer" />
         {bridge && info && (
           <button className="ghost" onClick={() => bridge.openPath(info.home)}>
-            <FolderOpen size={14} /> Abrir
+            <FolderOpen size={14} /> {T("settings.open")}
           </button>
         )}
         {bridge && (
           <button className="ghost" disabled={busy} onClick={async () => setTarget(await bridge.chooseFolder())}>
-            <FolderSync size={14} /> Cambiar…
+            <FolderSync size={14} /> {T("settings.change")}
           </button>
         )}
       </div>
       {target && (
         <div className="move-box">
           <p className="small">
-            Nueva carpeta: <code>{target}</code>
+            {T("settings.newFolder")} <code>{target}</code>
           </p>
           <div className="row">
             <button className="primary" disabled={busy} onClick={() => apply(true)}>
-              Mover mis datos aquí
+              {T("settings.moveData")}
             </button>
-            <button disabled={busy} onClick={() => apply(false)} title="Abre esa carpeta tal cual (nueva o de otra instalación de qtrix)">
-              Usar sin mover
+            <button disabled={busy} onClick={() => apply(false)} title={T("settings.useAsIsTitle")}>
+              {T("settings.useAsIs")}
             </button>
             <button className="ghost" disabled={busy} onClick={() => setTarget(null)}>
-              Cancelar
+              {T("settings.cancel")}
             </button>
           </div>
-          <p className="muted small">qtrix se reiniciará. Mover incluye datos, memoria, modelos descargados y registros.</p>
+          <p className="muted small">{T("settings.restartNote")}</p>
         </div>
       )}
       {error && <p className="error small">{error}</p>}
@@ -124,7 +125,7 @@ function FolderSection() {
           </tbody>
         </table>
       )}
-      {!bridge && <p className="muted small">Cambiar la carpeta solo está disponible en la app de escritorio.</p>}
+      {!bridge && <p className="muted small">{T("settings.desktopOnly")}</p>}
     </section>
   );
 }
@@ -142,14 +143,14 @@ function StatusSection({ s }: { s: UserSettings }) {
   return (
     <section>
       <h3>
-        <Activity size={15} /> Estado
+        <Activity size={15} /> {T("settings.status")}
       </h3>
       <div className="row">
         {s.active_is_local ? <HardDrive size={14} /> : <Cloud size={14} />}
-        {s.active_is_local ? "Modelo local: los prompts no salen de esta máquina" : `Los prompts se envían a ${provider}`}
+        {s.active_is_local ? T("settings.promptsLocal") : T("settings.promptsRemote", { provider: provider ?? "" })}
       </div>
       <div className="row">
-        <Brain size={14} /> Memoria semántica (turbovec): {memory}
+        <Brain size={14} /> {T("settings.memory", { status: memory })}
       </div>
     </section>
   );
@@ -171,7 +172,7 @@ export function SettingsModal({ onClose, onSaved }: { onClose(): void; onSaved(s
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <header>
-          <h2>Ajustes</h2>
+          <h2>{T("settings.title")}</h2>
           <button className="ghost" onClick={onClose}>
             <X size={16} />
           </button>
@@ -180,7 +181,7 @@ export function SettingsModal({ onClose, onSaved }: { onClose(): void; onSaved(s
           <FolderSection />
           <section>
             <h3>
-              <ShieldCheck size={15} /> Privacidad
+              <ShieldCheck size={15} /> {T("settings.privacy")}
             </h3>
             <label className="row">
               <input
@@ -189,10 +190,10 @@ export function SettingsModal({ onClose, onSaved }: { onClose(): void; onSaved(s
                 disabled={s.forced_local_only}
                 onChange={(e) => update({ local_only: e.target.checked })}
               />
-              Solo modelos locales: ningún prompt sale de esta máquina
+              {T("settings.localOnly")}
             </label>
             <p className="muted small">
-              Los datos nunca se envían: los modelos remotos solo reciben tu conversación y resúmenes de resultados.
+              {T("settings.dataNote")}
             </p>
           </section>
 
@@ -200,15 +201,15 @@ export function SettingsModal({ onClose, onSaved }: { onClose(): void; onSaved(s
 
           <section>
             <h3>
-              <KeyRound size={15} /> API keys (se guardan en el llavero del sistema)
+              <KeyRound size={15} /> {T("settings.apiKeys")}
             </h3>
-            <p className="muted small">Con una clave guardada, los modelos de ese proveedor aparecen en el selector de modelo del chat.</p>
+            <p className="muted small">{T("settings.apiKeysNote")}</p>
             {cloudProviders.map((p) => (
               <div key={p.id} className="row">
                 <span className="key-label">{p.label}</span>
                 <input
                   type="password"
-                  placeholder={s.api_keys?.[p.id] ? "•••••••• guardada" : "sin configurar"}
+                  placeholder={s.api_keys?.[p.id] ? T("settings.keySaved") : T("settings.keyUnset")}
                   value={keys[p.id] ?? ""}
                   onChange={(e) => setKeys({ ...keys, [p.id]: e.target.value })}
                 />
@@ -217,7 +218,7 @@ export function SettingsModal({ onClose, onSaved }: { onClose(): void; onSaved(s
                   disabled={!keys[p.id]}
                   onClick={() => api.setApiKey(p.id, keys[p.id]).then(() => api.settings().then((n) => (setS({ ...s, api_keys: n.api_keys }), setKeys({ ...keys, [p.id]: "" }))))}
                 >
-                  Guardar
+                  {T("settings.save")}
                 </button>
               </div>
             ))}
@@ -226,18 +227,18 @@ export function SettingsModal({ onClose, onSaved }: { onClose(): void; onSaved(s
           <UsageSection />
 
           <section>
-            <h3>Super-agente</h3>
+            <h3>{T("settings.superAgent")}</h3>
             <label className="col">
-              Instrucciones adicionales (estilo, campo de investigación, convenciones)
+              {T("settings.extraInstructions")}
               <textarea
                 rows={3}
                 value={s.agent.instructions_extra}
                 onChange={(e) => update({ agent: { ...s.agent, instructions_extra: e.target.value } })}
-                placeholder="Ej.: Soy economista laboral; usa siempre errores clusterizados por individuo."
+                placeholder={T("settings.extraInstructionsPlaceholder")}
               />
             </label>
             <label className="row">
-              Máximo de llamadas a herramientas por turno
+              {T("settings.maxToolCalls")}
               <input
                 type="number"
                 min={1}
@@ -252,7 +253,7 @@ export function SettingsModal({ onClose, onSaved }: { onClose(): void; onSaved(s
                 checked={s.agent.planner ?? true}
                 onChange={(e) => update({ agent: { ...s.agent, planner: e.target.checked } })}
               />
-              Planificar antes de actuar (planificador + ejecutor; una llamada al modelo más por mensaje)
+              {T("settings.planner")}
             </label>
             <label className="row">
               <input
@@ -260,21 +261,20 @@ export function SettingsModal({ onClose, onSaved }: { onClose(): void; onSaved(s
                 checked={s.agent.allow_code ?? false}
                 onChange={(e) => update({ agent: { ...s.agent, allow_code: e.target.checked } })}
               />
-              Ejecución automática de código: el agente ejecuta celdas Python sin pedir confirmación
+              {T("settings.autoExec")}
             </label>
             <p className="muted small">
-              El código se ejecuta en el kernel del proyecto con tus mismos permisos (archivos, red). Actívalo solo si confías en el modelo.
+              {T("settings.autoExecNote")}
             </p>
           </section>
 
           <section>
-            <h3>Contexto de la conversación</h3>
+            <h3>{T("settings.contextTitle")}</h3>
             <p className="muted small">
-              Cada llamada al modelo reenvía toda la conversación: un contexto más grande da más memoria al agente, pero
-              cuesta más tokens por llamada. El límite efectivo es el menor entre este y la ventana del modelo.
+              {T("settings.contextNote")}
             </p>
             <label className="row">
-              Contexto máximo
+              {T("settings.maxContext")}
               <select
                 value={s.agent.max_context ?? 1_000_000}
                 onChange={(e) => update({ agent: { ...s.agent, max_context: Number(e.target.value) } })}
@@ -283,7 +283,7 @@ export function SettingsModal({ onClose, onSaved }: { onClose(): void; onSaved(s
                   .sort((a, b) => a - b)
                   .map((n) => (
                     <option key={n} value={n}>
-                      {n >= 1_000_000 ? `${n / 1_000_000}M` : `${Math.round(n / 1000)}k`} tokens
+                      {T("settings.tokensSize", { size: n >= 1_000_000 ? `${n / 1_000_000}M` : `${Math.round(n / 1000)}k` })}
                     </option>
                   ))}
               </select>
@@ -294,7 +294,7 @@ export function SettingsModal({ onClose, onSaved }: { onClose(): void; onSaved(s
                 checked={s.agent.auto_compact ?? true}
                 onChange={(e) => update({ agent: { ...s.agent, auto_compact: e.target.checked } })}
               />
-              Compactar automáticamente al llegar al
+              {T("settings.compactAt")}
               <input
                 type="number"
                 min={10}
@@ -307,16 +307,16 @@ export function SettingsModal({ onClose, onSaved }: { onClose(): void; onSaved(s
                 }
                 style={{ width: 64 }}
               />
-              % del contexto
+              {T("settings.ofContext")}
             </label>
           </section>
         </div>
         <footer>
           <button className="ghost" onClick={onClose}>
-            Cancelar
+            {T("settings.cancel")}
           </button>
           <button className="primary" onClick={() => api.saveSettings(s).then((n) => (onSaved(n), onClose()))}>
-            Guardar
+            {T("settings.save")}
           </button>
         </footer>
       </div>

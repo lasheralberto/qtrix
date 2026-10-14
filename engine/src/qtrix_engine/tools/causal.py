@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from ..context import get_context
 from ..objects.specs import DmlSpec, RddSpec, SynthSpec
-from ..objects.views import compute, show
+from ..objects.views import add_artifact, compute, show
 from ._format import clean
 from .ols import publish, resolved_sample
 from .registry import Qx, tool
@@ -102,7 +102,6 @@ def causal_rd_density(dataset_id: str, running: str, cutoff: float = 0.0,
 
     from rddensity import rddensity
 
-    from ..panel import Block
 
     ws = get_context().workspace
     x = ws.df(dataset_id, [running], sample=sample)[running].dropna().astype(float)
@@ -119,10 +118,9 @@ def causal_rd_density(dataset_id: str, running: str, cutoff: float = 0.0,
                  "null_hypothesis": "The density of the running variable is continuous at the cutoff",
                  "conclusion": "Evidence of manipulation at the cutoff" if p < 0.05
                  else "No evidence of manipulation at the cutoff"})
-    get_context().panel.add(Block(kind="diagnostics", title=f"RD manipulation test · {running} at {cutoff:g}",
-                                  data={"tests": [{"test": "Cattaneo-Jansson-Ma density test", "statistic": stat,
-                                                   "p_value": p, "null_hypothesis": out["null_hypothesis"],
-                                                   "reject_5pct": p < 0.05}]}))
+    add_artifact("diagnostics", f"RD manipulation test · {running} at {cutoff:g}",
+                 {"tests": [{"test": "Cattaneo-Jansson-Ma density test", "statistic": stat, "p_value": p,
+                             "null_hypothesis": out["null_hypothesis"], "reject_5pct": p < 0.05}]})
     return out
 
 

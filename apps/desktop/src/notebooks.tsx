@@ -3,6 +3,7 @@ import { BookOpen, Copy, MoreHorizontal, Pencil, Plus, Search, Trash2, X } from 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Notebook } from "./api";
+import { T } from "./i18n";
 
 /** Where a row menu opens: under its "..." button. */
 export type MenuAt = { top: number; right: number };
@@ -23,22 +24,22 @@ export function RowMenu(props: { at: MenuAt; children: React.ReactNode }) {
 
 export const UNTITLED = "Cuaderno sin título";
 
-/** "hace 5 min", "ayer", or the date, from an epoch in seconds. */
+/** "5 min ago", "yesterday", or the date, from an epoch in seconds. */
 export function ago(epoch: number, now = Date.now()): string {
   const min = Math.max(0, Math.round((now - epoch * 1000) / 60000));
-  if (min < 1) return "ahora";
-  if (min < 60) return `hace ${min} min`;
+  if (min < 1) return T("notebooks.now");
+  if (min < 60) return T("notebooks.minAgo", { count: min });
   const h = Math.round(min / 60);
-  if (h < 24) return `hace ${h} h`;
+  if (h < 24) return T("notebooks.hoursAgo", { count: h });
   const d = Math.round(h / 24);
-  if (d === 1) return "ayer";
-  if (d < 7) return `hace ${d} días`;
-  return new Date(epoch * 1000).toLocaleDateString("es-ES", { day: "numeric", month: "short" });
+  if (d === 1) return T("notebooks.yesterday");
+  if (d < 7) return T("notebooks.daysAgo", { count: d });
+  return new Date(epoch * 1000).toLocaleDateString("en-US", { day: "numeric", month: "short" });
 }
 
 const counts = (nb: Notebook) =>
-  [nb.n_datasets ? `${nb.n_datasets} ${nb.n_datasets === 1 ? "dataset" : "datasets"}` : "vacío"]
-    .concat(nb.n_objects ? [`${nb.n_objects} obj.`] : [])
+  [nb.n_datasets ? T(nb.n_datasets === 1 ? "notebooks.datasetsOne" : "notebooks.datasetsOther", { count: nb.n_datasets }) : T("notebooks.empty")]
+    .concat(nb.n_objects ? [T("notebooks.objects", { count: nb.n_objects })] : [])
     .join(" · ");
 
 /** A title that turns into an input on click; Enter or leaving saves it, Escape cancels. */
@@ -68,7 +69,7 @@ export function EditableTitle(props: {
 
   if (!editing)
     return (
-      <h1 className={`${props.className ?? ""} editable`} title="Clic para renombrar" onClick={() => setEditing(true)}>
+      <h1 className={`${props.className ?? ""} editable`} title={T("notebooks.clickToRename")} onClick={() => setEditing(true)}>
         {props.value}
         <Pencil size={13} />
       </h1>
@@ -79,7 +80,7 @@ export function EditableTitle(props: {
       className="title-input"
       value={text}
       maxLength={80}
-      aria-label="Título del cuaderno"
+      aria-label={T("notebooks.titleLabel")}
       onChange={(e) => setText(e.target.value)}
       onBlur={() => finish(true)}
       onKeyDown={(e) => {
@@ -127,16 +128,16 @@ export function NotebookList(props: {
     <div className="notebooks">
       <div className="side-title">
         <span>
-          Cuadernos <span className="count">{props.notebooks.length}</span>
+          {T("notebooks.heading")} <span className="count">{props.notebooks.length}</span>
         </span>
-        <button className="ghost" title="Nuevo cuaderno" aria-label="Nuevo cuaderno" onClick={props.onCreate}>
+        <button className="ghost" title={T("notebooks.new")} aria-label={T("notebooks.new")} onClick={props.onCreate}>
           <Plus size={15} />
         </button>
       </div>
       {props.notebooks.length > 5 && (
         <label className="nb-search">
           <Search size={13} />
-          <input value={query} placeholder="Buscar cuaderno" onChange={(e) => setQuery(e.target.value)} />
+          <input value={query} placeholder={T("notebooks.search")} onChange={(e) => setQuery(e.target.value)} />
         </label>
       )}
       <ul className="nb-list">
@@ -145,7 +146,7 @@ export function NotebookList(props: {
           if (confirming === nb.id)
             return (
               <li key={nb.id} className="nb-confirm">
-                <span>¿Borrar «{nb.title}»? Va a la papelera de qtrix.</span>
+                <span>{T("notebooks.confirmDelete", { title: nb.title })}</span>
                 <span className="nb-confirm-actions">
                   <button
                     className="danger"
@@ -154,10 +155,10 @@ export function NotebookList(props: {
                       props.onDelete(nb.id);
                     }}
                   >
-                    <Trash2 size={13} /> Borrar
+                    <Trash2 size={13} /> {T("notebooks.delete")}
                   </button>
                   <button className="ghost" onClick={() => setConfirming(null)}>
-                    <X size={13} /> Cancelar
+                    <X size={13} /> {T("notebooks.cancel")}
                   </button>
                 </span>
               </li>
@@ -180,7 +181,7 @@ export function NotebookList(props: {
                   className="nb-item"
                   aria-current={active}
                   disabled={props.locked && !active}
-                  title={props.locked && !active ? "Espera a que termine el turno en curso" : nb.title}
+                  title={props.locked && !active ? T("notebooks.waitForTurn") : nb.title}
                   onClick={() => props.onSelect(nb.id)}
                 >
                   <BookOpen size={14} />
@@ -194,7 +195,7 @@ export function NotebookList(props: {
               )}
               <button
                 className="ghost nb-more"
-                aria-label={`Acciones de ${nb.title}`}
+                aria-label={T("notebooks.actionsFor", { title: nb.title })}
                 aria-haspopup="menu"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -213,10 +214,10 @@ export function NotebookList(props: {
                       setMenu(null);
                     }}
                   >
-                    <Pencil size={13} /> Renombrar
+                    <Pencil size={13} /> {T("notebooks.rename")}
                   </button>
                   <button role="menuitem" onClick={() => props.onDuplicate(nb.id)}>
-                    <Copy size={13} /> Duplicar
+                    <Copy size={13} /> {T("notebooks.duplicate")}
                   </button>
                   <button
                     role="menuitem"
@@ -226,14 +227,14 @@ export function NotebookList(props: {
                       setMenu(null);
                     }}
                   >
-                    <Trash2 size={13} /> Borrar
+                    <Trash2 size={13} /> {T("notebooks.delete")}
                   </button>
                 </RowMenu>
               )}
             </li>
           );
         })}
-        {shown.length === 0 && <li className="muted small nb-none">Ningún cuaderno coincide.</li>}
+        {shown.length === 0 && <li className="muted small nb-none">{T("notebooks.noMatch")}</li>}
       </ul>
     </div>
   );

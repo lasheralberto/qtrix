@@ -187,6 +187,32 @@ def show(name: str, view_name: str | None = None, params: dict[str, Any] | None 
                                code=result.code, ref=live_ref))
 
 
+def add_artifact(kind: str, title: str, data: dict[str, Any], code: str | None = None, *,
+                 replace_block_id: str | None = None) -> Block:
+    """Put a table or chart the assistant just produced in the report *as an object*: a graph object (gph01...) for
+    a Plotly figure, a table object (tab01...) for anything else. The block is a live view of that object, so every
+    artifact can be named, locked, renamed, copied and listed like any other object. With ``replace_block_id`` the
+    block's object gets a new version (the block follows it); a block that has no object yet just takes the new content.
+    """
+    from .specs import FrozenGraphSpec, FrozenTableSpec
+
+    ctx = get_context()
+    data = clean(data)
+    spec: Any = (FrozenGraphSpec(title=title, figure=data) if kind == "plotly_figure"
+                 else FrozenTableSpec(title=title, kind=kind, data=data))
+    name = None
+    if replace_block_id:
+        block = ctx.panel.get(replace_block_id)
+        name = block.result_id if block.result_id and ctx.objects.exists(block.result_id) else None
+        if name is None:
+            return ctx.panel.update(replace_block_id, title=title, data=data, code=code)
+    obj = ctx.objects.estimate(spec, name)
+    block = show(obj.name)
+    if code and block.code != code:
+        block = ctx.panel.update(block.id, code=code, by_agent=False, checkpoint=False)
+    return block
+
+
 def refresh(panel: PanelState, name: str, *, new_version: bool) -> None:
     """After an object changed: recompute its live blocks; flag its frozen blocks stale when it has a new version."""
     for block in panel.blocks():

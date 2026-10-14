@@ -10,8 +10,7 @@ from typing import Any, Literal
 
 from ..context import get_context
 from ..objects.specs import ArdlSpec, ArimaSpec, MarkovSpec, VarSpec, VecmSpec
-from ..objects.views import show
-from ..panel import Block
+from ..objects.views import add_artifact, show
 from ._format import clean, figure_data
 from .ols import publish, resolved_sample
 from .registry import Qx, tool
@@ -75,12 +74,10 @@ def ts_unit_root(dataset_id: str, column: str,
     out.update({"test": test.upper(), "series": column, "dataset": info.name, "trend": trend,
                 "sample": f"{y.index[0].date()} – {y.index[-1].date()}"})
     out = clean(out)
-    get_context().panel.add(Block(
-        kind="diagnostics", title=f"{test.upper()} test · {column}",
-        data={"tests": [{"test": out["test"], "statistic": out["statistic"], "p_value": out["p_value"],
-                         "null_hypothesis": out["null_hypothesis"],
-                         "reject_5pct": out["p_value"] is not None and out["p_value"] < 0.05}]},
-    ))
+    add_artifact("diagnostics", f"{test.upper()} test · {column}",
+                 {"tests": [{"test": out["test"], "statistic": out["statistic"], "p_value": out["p_value"],
+                             "null_hypothesis": out["null_hypothesis"],
+                             "reject_5pct": out["p_value"] is not None and out["p_value"] < 0.05}]})
     return out
 
 
@@ -263,8 +260,7 @@ def ts_granger(dataset_id: str, caused: str, causing: list[str], maxlag: int = 4
             results[x][f"lag {lag}"] = {"f_stat": f_stat, "p_value": p}
             rows.append({"test": f"Granger {x} → {caused}, lag {lag}", "statistic": f_stat, "p_value": p,
                          "null_hypothesis": f"{x} does not Granger-cause {caused}", "reject_5pct": bool(p < 0.05)})
-    get_context().panel.add(Block(kind="diagnostics", title=f"Granger causality → {caused}",
-                                  data={"tests": clean(rows)}))
+    add_artifact("diagnostics", f"Granger causality → {caused}", {"tests": clean(rows)})
     return clean({"caused": caused, "dataset": info.name, "differenced": diff, "n_obs": len(data), "results": results,
                   "sample": f"{data.index[0].date()} – {data.index[-1].date()}"})
 
@@ -317,8 +313,7 @@ def ts_cointegration(dataset_id: str, columns: list[str], test: Literal["johanse
                  "reject_5pct": r["reject_trace_5pct"]} for r in relations]
     out.update({"series": columns, "dataset": info.name, "trend": trend, "sample": span})
     out = clean(out)
-    get_context().panel.add(Block(kind="diagnostics", title=f"Cointegration ({out['test']}) · {', '.join(columns)}",
-                                  data={"tests": clean(rows)}))
+    add_artifact("diagnostics", f"Cointegration ({out['test']}) · {', '.join(columns)}", {"tests": clean(rows)})
     return out
 
 
@@ -354,7 +349,7 @@ def ts_acf_pacf(dataset_id: str, column: str, lags: int = 24, diff: int = 0,
         fig.add_hline(y=band, line_dash="dot", row=1, col=col)
         fig.add_hline(y=-band, line_dash="dot", row=1, col=col)
     label = column if not diff else f"d{diff}({column})"
-    get_context().panel.add(Block(kind="plotly_figure", title=f"Correlogram · {label}", data=figure_data(fig)))
+    add_artifact("plotly_figure", f"Correlogram · {label}", figure_data(fig))
     lb = acorr_ljungbox(y, lags=[min(lags, 10)])
     return clean({"series": label, "dataset": info.name, "n_obs": len(y),
                   "acf": {str(i): float(a[i]) for i in k[:12]}, "pacf": {str(i): float(p[i]) for i in k[:12]},
@@ -388,7 +383,7 @@ def ts_breaks(dataset_id: str, column: str, max_breaks: int = 3, min_size: int =
     for seg, s, e in zip(segments, starts, ends, strict=True):
         fig.add_scatter(x=[y.index[s].isoformat(), y.index[e - 1].isoformat()], y=[seg["mean"]] * 2,
                         name=f"mean {seg['mean']:.3g}", mode="lines", line={"dash": "dash"})
-    get_context().panel.add(Block(kind="plotly_figure", title=f"Structural breaks · {column}", data=figure_data(fig)))
+    add_artifact("plotly_figure", f"Structural breaks · {column}", figure_data(fig))
     return clean({"series": column, "dataset": info.name, "break_dates": [str(y.index[e].date()) for e in ends[:-1]],
                   "segments": segments})
 
@@ -432,7 +427,7 @@ def ts_forecast(dataset_id: str, column: str, horizon: int = 8,
     fig.add_scatter(x=fut + fut[::-1], y=list(hi) + list(lo)[::-1], fill="toself", name="95% interval",
                     line={"width": 0}, opacity=0.3)
     fig.add_scatter(x=fut, y=mean, name="Forecast", mode="lines")
-    get_context().panel.add(Block(kind="plotly_figure", title=f"Forecast {column} · {model}", data=figure_data(fig)))
+    add_artifact("plotly_figure", f"Forecast {column} · {model}", figure_data(fig))
     return clean({"series": column, "dataset": info.name, "model": model, "season_length": season_length,
                   "forecast": {t[:10]: float(v) for t, v in zip(fut, mean, strict=True)},
                   "lower_95": [float(v) for v in lo], "upper_95": [float(v) for v in hi]})

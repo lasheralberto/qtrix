@@ -49,6 +49,7 @@ import {
   type QxSignature,
 } from "./api";
 import { BlockBody, Markdown } from "./blocks";
+import { T } from "./i18n";
 
 // ---- completions -------------------------------------------------------------------------
 let completionsCache: Promise<Completions> | null = null;
@@ -258,10 +259,13 @@ function signatureTooltip(state: EditorState): Tooltip | null {
           el(
             "div",
             "qx-sig-methods",
-            `method='${sig.method}' · otros: ${fn.signatures
-              .filter((s) => s !== sig)
-              .map((s) => s.method)
-              .join(", ")}`,
+            T("cells.methodOthers", {
+              method: String(sig.method),
+              others: fn.signatures
+                .filter((s) => s !== sig)
+                .map((s) => s.method)
+                .join(", "),
+            }),
           ),
         );
       if (active) {
@@ -312,7 +316,7 @@ function keywordOptions(
       detail: [
         p.type,
         p.required
-          ? "obligatorio"
+          ? T("cells.required")
           : p.default !== null
             ? `= ${p.default}`
             : null,
@@ -351,7 +355,7 @@ async function qxComplete(ctx: CompletionContext) {
     for (const o of names.objects)
       options.push({ label: o.name, type: "class", detail: o.type });
     for (const p of names.pages)
-      options.push({ label: p.name, type: "namespace", detail: "page" });
+      options.push({ label: p.name, type: "namespace", detail: T("cells.detailPage") });
     return { from: word.from, options, validFor: /^\w*$/ };
   }
   const member = ctx.matchBefore(/(qx\.report|qx|\)|\w+)\.\w*/);
@@ -389,8 +393,8 @@ async function qxComplete(ctx: CompletionContext) {
     return {
       from,
       options: [
-        ...fn(names.functions.obj, "obj", "objeto"),
-        ...fn(names.functions.page, "page", "página"),
+        ...fn(names.functions.obj, "obj", T("cells.detailObject")),
+        ...fn(names.functions.page, "page", T("cells.detailPage")),
       ],
     };
   }
@@ -664,18 +668,18 @@ export function CodeCell(props: {
         {object && (
           <button
             className="chip"
-            title="Abrir objeto en el panel"
+            title={T("cells.openObjectInPanel")}
             onClick={() => props.onOpenObject(object, cell.block_id)}
           >
             {object}
             {version ? <sup>v{version}</sup> : null}
           </button>
         )}
-        {edited && <span className="pill ok">editada</span>}
+        {edited && <span className="pill ok">{T("cells.edited")}</span>}
         <span className="cell-actions">
           {!editing && (
             <button
-              title="Editar"
+              title={T("cells.edit")}
               onClick={() => setEditing(true)}
               disabled={running}
             >
@@ -683,7 +687,7 @@ export function CodeCell(props: {
             </button>
           )}
           <button
-            title={editing ? "Ejecutar (Ctrl+Enter)" : "Re-ejecutar"}
+            title={editing ? T("cells.runShortcut") : T("cells.rerun")}
             onClick={execute}
             disabled={running || (editing && errors > 0)}
           >
@@ -691,7 +695,7 @@ export function CodeCell(props: {
           </button>
           {editing && (
             <button
-              title="Cancelar edición"
+              title={T("cells.cancelEdit")}
               onClick={() => {
                 setEditing(false);
                 setCode(original);
@@ -702,14 +706,14 @@ export function CodeCell(props: {
           )}
           {object && (
             <button
-              title="Abrir objeto"
+              title={T("cells.openObject")}
               onClick={() => props.onOpenObject(object, cell.block_id)}
             >
               <ExternalLink size={13} />
             </button>
           )}
           <button
-            title="Copiar código"
+            title={T("cells.copyCode")}
             onClick={() => {
               navigator.clipboard.writeText(code);
               setCopied(true);
@@ -737,16 +741,13 @@ export function CodeCell(props: {
         <div className="cell-note warn">
           <TriangleAlert size={13} />
           <span>
-            Python libre ({check.reason}): se ejecutará en el kernel del
-            proyecto. Si registra un modelo propio, el objeto pierde su
-            especificación estructurada y ya no se podrá re-estimar desde ella.
+            {T("cells.freePython", { reason: check.reason })}
           </span>
         </div>
       )}
       {editing && changed && check?.kind === "api" && errors === 0 && (
         <div className="cell-note">
-          Ctrl+Enter ejecuta la celda: crea una nueva versión y refresca sus
-          vistas en el panel.
+          {T("cells.runHint")}
         </div>
       )}
       {run && <RunOutcome run={run} />}
@@ -765,8 +766,8 @@ export function CodeCell(props: {
             onClick={() => setShowResult((s) => !s)}
           >
             <ChevronRight size={12} className={showResult ? "rot" : ""} />{" "}
-            Resultado
-            {block?.stale && <span className="pill warn">desactualizado</span>}
+            {T("cells.result")}
+            {block?.stale && <span className="pill warn">{T("cells.stale")}</span>}
           </button>
           {showResult &&
             (block ? (
@@ -789,18 +790,18 @@ function RunOutcome({ run }: { run: CodeRun | { error: string } }) {
   if (run.ok) {
     message = run.versions.length
       ? run.versions.map((v) => `${v.name} → v${v.version}`).join(", ") +
-        " · vistas del panel actualizadas"
-      : "Ejecutada";
+        T("cells.panelViewsUpdated")
+      : T("cells.executed");
   } else if (run.kind === "api") {
     message =
-      run.calls.find((c) => !c.ok && !c.skipped)?.error ?? "La celda falló";
+      run.calls.find((c) => !c.ok && !c.skipped)?.error ?? T("cells.cellFailed");
   } else {
     message =
       typeof run.error === "string"
         ? run.error
         : run.error?.ename
           ? `${run.error.ename}: ${run.error.evalue ?? ""}`
-          : "La celda falló";
+          : T("cells.cellFailed");
   }
   return (
     <div className={`cell-note ${run.ok ? "ok" : "fail"}`}>
@@ -808,7 +809,7 @@ function RunOutcome({ run }: { run: CodeRun | { error: string } }) {
       <span>
         {message}
         {run.stale.length > 0 && (
-          <> · desactualizados: {run.stale.join(", ")}</>
+          <> · {T("cells.staleList", { names: run.stale.join(", ") })}</>
         )}
       </span>
       {run.kind === "python" && run.text ? (
@@ -826,8 +827,10 @@ export function TurnCode({ cells }: { cells: CellInfo[] }) {
   return (
     <div className="turn-code">
       <button className="cell-toggle" onClick={() => setOpen((o) => !o)}>
-        <ChevronRight size={12} className={open ? "rot" : ""} /> {cells.length}{" "}
-        {cells.length === 1 ? "celda" : "celdas"} · código del turno
+        <ChevronRight size={12} className={open ? "rot" : ""} />{" "}
+        {T(cells.length === 1 ? "cells.turnCode.one" : "cells.turnCode.other", {
+          count: cells.length,
+        })}
       </button>
       {open && (
         <div className="code">

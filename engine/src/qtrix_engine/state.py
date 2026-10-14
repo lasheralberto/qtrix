@@ -74,6 +74,15 @@ CREATE TABLE IF NOT EXISTS _qtrix_threads (
     deleted_at DOUBLE
 )"""
 
+REPORTING_DDL = """
+CREATE TABLE IF NOT EXISTS _qtrix_reporting (
+    thread_id  VARCHAR PRIMARY KEY,
+    enabled    BOOLEAN,
+    version    BIGINT,
+    report     VARCHAR,
+    updated_at TIMESTAMP DEFAULT now()
+)"""
+
 
 def _dumps(value: Any) -> str:
     return json.dumps(value, default=str, ensure_ascii=False)
@@ -88,7 +97,7 @@ class StateStore:
     def __init__(self, workspace: Workspace) -> None:
         self._ws = workspace
         with workspace._lock:
-            for ddl in (CHAT_DDL, LEGACY_PANEL_DDL, PANELS_DDL, THREADS_DDL):
+            for ddl in (CHAT_DDL, LEGACY_PANEL_DDL, PANELS_DDL, THREADS_DDL, REPORTING_DDL):
                 workspace._con.execute(ddl)
 
     # ---- threads --------------------------------------------------------------------------------------------
@@ -111,6 +120,22 @@ class StateStore:
         with self._ws._lock:
             self._ws._con.execute("UPDATE _qtrix_threads SET deleted_at = ? WHERE thread_id = ?",
                                   [time.time(), thread_id])
+
+    # ---- reporting ------------------------------------------------------------------------------------------
+    def save_reporting(self, thread: Thread) -> None:
+        with self._ws._lock:
+            self._ws._con.execute(
+                "INSERT OR REPLACE INTO _qtrix_reporting (thread_id, enabled, version, report) VALUES (?, ?, ?, ?)",
+                [thread.id, thread.reporting, thread.report_version,
+                 _dumps(thread.report) if thread.report is not None else None])
+
+    def load_reporting(self, thread: Thread) -> None:
+        with self._ws._lock:
+            row = self._ws._con.execute(
+                "SELECT enabled, version, report FROM _qtrix_reporting WHERE thread_id = ?", [thread.id]).fetchone()
+        if row is not None:
+            thread.reporting, thread.report_version = bool(row[0]), int(row[1] or 0)
+            thread.report = json.loads(row[2]) if row[2] else None
 
     # ---- chat and panel -------------------------------------------------------------------------------------
     def save_chat(self, chat: ChatSession, thread_id: str = MAIN) -> None:
@@ -195,6 +220,7 @@ class Autosave:
         try:
             self._store.load_panel(thread.panel, thread.id)
             self._store.load_chat(thread.chat, thread.id)
+            self._store.load_reporting(thread)
         except Exception:  # noqa: BLE001 - one unreadable conversation must not keep the notebook from opening
             log.exception("Could not restore the conversation %s of a notebook; starting it empty", thread.id)
         self._ctx.threads[thread.id] = thread
@@ -217,6 +243,12 @@ class Autosave:
             self._store.save_thread(thread)
         except Exception:  # noqa: BLE001 - persistence must never break the chat or the panel
             log.exception("Could not save the conversation %s of a notebook", thread.id)
+
+    def save_reporting(self, thread: Thread) -> None:
+        try:
+            self._store.save_reporting(thread)
+        except Exception:  # noqa: BLE001 - persistence must never break the chat or the panel
+            log.exception("Could not save the report of conversation %s", thread.id)
 
     def remove(self, thread_id: str) -> None:
         """The conversation was deleted: drop its pending writes and take it off the list."""

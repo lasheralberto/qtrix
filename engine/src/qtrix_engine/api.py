@@ -22,7 +22,8 @@ from pydantic import BaseModel, Field
 
 from . import __version__
 from .agents.autocompact import context_window
-from .agents.lead import ChatSession, build_lead_agent
+from .agents.lead import ChatSession, build_lead_agent, reporter_of
+from .agents.reporting import ConversationReport, turns_of, update_report
 from .config import LAYOUT, Settings, bootstrap_dir, resolve_home
 from .context import (
     DEFAULT_THREAD_TITLE,
@@ -65,6 +66,7 @@ from .qx.check import check_call
 from .qx.code import run_cell
 from .qx.forms import names as qx_names
 from .qx.forms import signatures as qx_signatures
+from .qx.forms import tool_help as qx_tool_help
 from .replay import ReplayError, UndoError, replay
 from .state import Autosave, StateStore, title_from
 from .tools._format import clean, df_block_data
@@ -108,6 +110,7 @@ class NotebookRequest(BaseModel):
 
 class ThreadRequest(BaseModel):
     title: str | None = None
+    reporting: bool | None = None
 
 
 class PanelStructureRequest(BaseModel):
@@ -422,6 +425,36 @@ class Engine:
         self.ctx.autosave.save_meta(thread)
         return self.thread_dict(thread)
 
+    def set_reporting(self, thread_id: str, enabled: bool) -> dict[str, Any]:
+        thread = self.thread(thread_id)
+        thread.reporting = enabled
+        self.ctx.autosave.save_reporting(thread)
+        return self.thread_dict(thread)
+
+    def reporting_dict(self, thread: Thread) -> dict[str, Any]:
+        return {"enabled": thread.reporting, "version": thread.report_version, "report": thread.report}
+
+    async def reporting_events(self, thread: Thread, *, full: bool) -> AsyncIterator[dict[str, Any]]:
+        """Rewrite the conversation's report from its last turn (``full``: from every turn, starting over). The caller
+        holds the chat lock. Yields ``reporting`` events; a failure is an ``error`` status, never an exception."""
+        yield {"type": "reporting", "status": "running", "version": thread.report_version}
+        try:
+            reporter = reporter_of(self.agent())
+            turns = turns_of(thread.chat.transcript)
+            if reporter is None or not turns:
+                yield {"type": "reporting", "status": "done", "version": thread.report_version}
+                return
+            previous = None if full or not thread.report else ConversationReport(**thread.report)
+            known = {o.name for o in await asyncio.to_thread(self.ctx.objects.list)}
+            report = await update_report(reporter, previous, turns if previous is None else turns[-1:], known=known)
+            thread.report = report.model_dump()
+            thread.report_version += 1
+            await asyncio.to_thread(self.ctx.autosave.save_reporting, thread)
+            yield {"type": "reporting", "status": "done", "version": thread.report_version}
+        except Exception as exc:  # noqa: BLE001 - the report must never break the chat
+            log.exception("Reporting failed")
+            yield {"type": "reporting", "status": "error", "message": f"{type(exc).__name__}: {exc}"}
+
     def delete_thread(self, thread_id: str) -> None:
         """Take a conversation off the notebook (its rows stay in the file). The datasets and objects it made stay."""
         ctx = self.ctx
@@ -711,7 +744,34 @@ def create_app(settings: Settings | None = None, *, model_override: Any = None, 
 
     @app.patch("/threads/{thread_id}")
     async def rename_thread(thread_id: str, req: ThreadRequest) -> dict[str, Any]:
-        return await asyncio.to_thread(engine.rename_thread, thread_id, req.title or "")
+        out = engine.thread_dict(engine.thread(thread_id))
+        if req.title is not None:
+            out = await asyncio.to_thread(engine.rename_thread, thread_id, req.title)
+        if req.reporting is not None:
+            out = await asyncio.to_thread(engine.set_reporting, thread_id, req.reporting)
+        return out
+
+    @app.get("/reporting")
+    async def get_reporting() -> dict[str, Any]:
+        return engine.reporting_dict(engine.ctx.thread)
+
+    @app.post("/reporting/rebuild")
+    async def rebuild_reporting() -> StreamingResponse:
+        """Write the report again from every turn of the conversation (streams ``reporting`` events)."""
+        try:
+            engine.validate_model()
+        except (ProviderBlocked, ValueError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        thread = engine.ctx.thread
+
+        async def events() -> AsyncIterator[str]:
+            async with engine._chat_lock:
+                await engine.prepare_model()
+                async for ev in engine.reporting_events(thread, full=True):
+                    yield _sse(ev)
+                yield _sse({"type": "done"})
+
+        return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
     @app.delete("/threads/{thread_id}")
     async def delete_thread(thread_id: str) -> dict[str, bool]:
@@ -736,6 +796,14 @@ def create_app(settings: Settings | None = None, *, model_override: Any = None, 
     @app.get("/tools")
     async def tools() -> dict[str, Any]:
         return {"namespaces": NAMESPACES, "tools": catalog()}
+
+    @app.get("/tools/{name}/help")
+    async def tool_help_(name: str) -> dict[str, Any]:
+        """A tool's summary and parameters, for the help popup of the composer's autocomplete."""
+        info = qx_tool_help(name)
+        if info is None:
+            raise HTTPException(404, f"Unknown tool '{name}'")
+        return clean(info)
 
     @app.get("/methods")
     async def methods() -> dict[str, Any]:
@@ -951,6 +1019,18 @@ def create_app(settings: Settings | None = None, *, model_override: Any = None, 
     async def object_views(name: str) -> dict[str, Any]:
         """The views (with their parameters) and procs of an object: what the UI's View and Proc menus show."""
         return await asyncio.to_thread(dispatch_read, "obj_views", name=name)
+
+    @app.get("/objects/{name}/view")
+    async def object_default_view(name: str) -> dict[str, Any]:
+        """The object's default view, computed without touching the panel (what a report embeds)."""
+        def go() -> dict[str, Any]:
+            result, live_ref = compute_view(name)
+            return {**result.to_dict(), "ref": live_ref, "version": engine.ctx.objects.get(name).version}
+
+        try:
+            return clean(await asyncio.to_thread(go))
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, f"{type(exc).__name__}: {exc}") from exc
 
     @app.get("/objects/{name}/views/{view}")
     async def object_view(name: str, view: str, params: str | None = None) -> dict[str, Any]:
@@ -1474,6 +1554,9 @@ def create_app(settings: Settings | None = None, *, model_override: Any = None, 
                         elif event["type"] == "tool_call":
                             tool_log.append(f"{event['name']}({json.dumps(event['args'], default=str)[:300]})")
                         yield _sse(event)
+                    if thread.reporting:
+                        async for ev in engine.reporting_events(thread, full=thread.report is None):
+                            yield _sse(ev)
                 except Exception as exc:  # noqa: BLE001 - stream the failure to the UI instead of dropping
                     log.exception("Chat run failed")
                     yield _sse({"type": "error", "message": f"{type(exc).__name__}: {exc}"})

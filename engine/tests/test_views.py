@@ -134,3 +134,21 @@ def test_http_views_and_freeze(tmp_path, wages_csv):
     frozen = c.post(f"/panel/blocks/{block['id']}/freeze").json()  # the user may freeze a pinned block
     assert frozen["ref"] is None and frozen["pinned"]
     assert c.post("/panel/blocks/nope/freeze").status_code == 404
+
+
+def test_every_artifact_the_assistant_makes_is_an_object(ctx, wages):
+    stats = run("data_summary_stats", dataset_id="wages")  # a table
+    run("data_correlation", dataset_id="wages")  # a chart
+    fig = run("viz_histogram", dataset_id="wages", column="lwage")
+    blocks = [b for b in ctx.panel.blocks() if b.kind in ("dataframe", "plotly_figure")]
+    assert stats and len(blocks) == 3
+    assert all(b.result_id and b.ref and ctx.objects.exists(b.result_id) for b in blocks)
+    assert [ctx.objects.get(b.result_id).type for b in blocks] == ["table", "graph", "graph"]
+    assert fig["object"] == blocks[2].result_id
+    assert len({b.result_id for b in blocks}) == 3
+
+    # replacing keeps the object and gives it a new version
+    run("viz_histogram", dataset_id="wages", column="educ", replace_block_id=fig["block_id"])
+    replaced = ctx.panel.get(fig["block_id"])
+    assert replaced.result_id == fig["object"] and ctx.objects.get(fig["object"]).version == 2
+    assert "educ" in replaced.title

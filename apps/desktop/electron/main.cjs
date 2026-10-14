@@ -198,6 +198,20 @@ ipcMain.handle("shell:open-path", (_event, target) => {
   return shell.openPath(target);
 });
 
+ipcMain.handle("report:pdf", async (_event, name) => {
+  try {
+    const dir = path.join(qtrixHome(), "exports");
+    fs.mkdirSync(dir, { recursive: true });
+    const slug = String(name || "reporte").normalize("NFKD").replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+    const file = path.join(dir, `${slug || "reporte"}-${new Date().toISOString().slice(0, 10)}.pdf`);
+    const pdf = await mainWindow.webContents.printToPDF({ pageSize: "A4", printBackground: true });
+    fs.writeFileSync(file, pdf);
+    return { ok: true, path: file };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+});
+
 ipcMain.handle("home:get", () => ({ home: qtrixHome(), defaultHome: defaultHome() }));
 
 ipcMain.handle("home:set", async (_event, { path: requested, move }) => {

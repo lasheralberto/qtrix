@@ -45,6 +45,7 @@ import {
 import { Markdown } from "./blocks";
 import { describeAction, words } from "./actions";
 import { CodeCell, TurnCode } from "./cells";
+import { T } from "./i18n";
 
 export interface Turn {
   key: string;
@@ -67,10 +68,10 @@ export interface Turn {
 }
 
 export const SUGGESTIONS = [
-  "Describe los datos y propón un modelo",
-  "Estima el retorno de la educación con errores robustos",
-  "¿Hay heterocedasticidad? Comprueba los supuestos",
-  "Compara efectos fijos y aleatorios (Hausman)",
+  T("chat.suggestDescribe"),
+  T("chat.suggestReturnEducation"),
+  T("chat.suggestHeteroskedasticity"),
+  T("chat.suggestHausman"),
 ];
 
 function turnsFrom(history: ChatTurn[]): Turn[] {
@@ -113,6 +114,8 @@ export function useChat(
   lastBlock: () => string | null,
   /** The conversation shown ("<notebook>/<thread>"); null while it is not known yet. */
   conversation: string | null,
+  /** Reporting mode: the ReportingAgent's progress after each turn. */
+  onReporting?: (ev: Extract<ChatEvent, { type: "reporting" }>) => void,
 ) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
@@ -120,6 +123,8 @@ export function useChat(
   const [compacting, setCompacting] = useState(false);
   const abort = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
+  const reportingRef = useRef(onReporting);
+  reportingRef.current = onReporting;
 
   // The meter's thresholds come with GET /chat/context; turn events only update the counts.
   const refreshContext = useCallback(
@@ -219,6 +224,9 @@ export function useChat(
       case "context":
         updateContext(ev);
         break;
+      case "reporting":
+        reportingRef.current?.(ev);
+        break;
       case "compacted":
         updateContext(ev);
         patchLast((t) => ({ ...t, compacted: true }));
@@ -301,13 +309,15 @@ export function ContextMeter({
   const r = 7;
   const arc = 2 * Math.PI * r;
   const auto = context.auto_compact !== false;
-  const title =
-    `Contexto: ${context.estimated ? "~" : ""}${context.used.toLocaleString()} de ` +
-    `${context.limit.toLocaleString()} tokens (${Math.round(share * 100)} %)\n` +
-    (auto
-      ? `Se compacta automáticamente al ${Math.round(at * 100)} %.`
-      : "La compactación automática está desactivada.") +
-    "\nPulsa para compactar ahora.";
+  const title = T("chat.contextTitle", {
+    estimated: context.estimated ? "~" : "",
+    used: context.used.toLocaleString(),
+    limit: context.limit.toLocaleString(),
+    percent: Math.round(share * 100),
+    auto: auto
+      ? T("chat.contextAutoOn", { percent: Math.round(at * 100) })
+      : T("chat.contextAutoOff"),
+  });
   return (
     <button
       type="button"
@@ -374,8 +384,8 @@ export function TurnHead(props: {
   return (
     <section className="turn-head">
       {turn.compacted && (
-        <div className="turn-compacted" title="El agente sigue a partir de un resumen de lo anterior; aquí ves la conversación entera">
-          Conversación compactada
+        <div className="turn-compacted" title={T("chat.compactedTitle")}>
+          {T("chat.compacted")}
         </div>
       )}
       <div className="turn-question">{turn.question}</div>
@@ -388,9 +398,9 @@ export function TurnHead(props: {
       {n > 0 && (
         <button className="turn-toggle" onClick={() => setOpen((o) => !o)}>
           <ChevronRight size={12} className={open ? "rot" : ""} />
-          {n} {n === 1 ? "acción" : "acciones"} del agente · Python
+          {T(n === 1 ? "chat.actionsOne" : "chat.actionsOther", { count: n })}
           {cells.some((t) => t.ok === false) && (
-            <span className="pill warn">con errores</span>
+            <span className="pill warn">{T("chat.withErrors")}</span>
           )}
         </button>
       )}
@@ -420,7 +430,7 @@ export function TurnHead(props: {
 function liveMessage(turn: Turn, cells: CellInfo[]): string {
   if (turn.status) return words(turn.status);
   const last = cells[cells.length - 1];
-  return last ? describeAction(last) : "Pensando en cómo abordarlo…";
+  return last ? describeAction(last) : T("chat.thinking");
 }
 
 /** A line of text that changes by blurring out the old message and blurring in the new one. */
@@ -455,11 +465,11 @@ function WorkspaceChip({ turn, onOpen }: { turn: Turn; onOpen(): void }) {
   const notes = turn.scratch?.notes.length ?? 0;
   if (!steps.length && !notes && !turn.running) return null;
   return (
-    <button className={`ws-chip ${turn.running ? "live" : ""}`} onClick={onOpen} title="Ver el espacio de trabajo del agente">
+    <button className={`ws-chip ${turn.running ? "live" : ""}`} onClick={onOpen} title={T("chat.openWorkspaceTitle")}>
       <PanelRightOpen size={13} />
-      Espacio de trabajo
+      {T("chat.workspace")}
       {steps.length > 0 && (
-        <span className="ws-chip-meter" aria-label={`${settled} de ${steps.length} pasos`}>
+        <span className="ws-chip-meter" aria-label={T("chat.stepsProgress", { settled, total: steps.length })}>
           <span style={{ width: `${(100 * settled) / steps.length}%` }} />
         </span>
       )}
@@ -478,8 +488,8 @@ export function TurnAnswer({ turn }: { turn: Turn }) {
   return (
     <article className={`block answer ${turn.running ? "streaming" : ""}`}>
       <header className="answer-head">
-        <Sparkles size={13} /> Respuesta
-        {turn.running && <span className="muted small">redactando…</span>}
+        <Sparkles size={13} /> {T("chat.answer")}
+        {turn.running && <span className="muted small">{T("chat.writing")}</span>}
       </header>
       <div className="block-body">
         {turn.text && <Markdown text={turn.text} />}
@@ -584,6 +594,7 @@ export const Composer = forwardRef<
           items={items}
           word={typing.word}
           active={active}
+          datasets={datasets}
           onHover={setActive}
           onPick={accept}
         />
@@ -591,7 +602,7 @@ export const Composer = forwardRef<
       <textarea
         ref={area}
         value={input}
-        placeholder="Pregunta al equipo econométrico… Ej.: estima un modelo de efectos fijos de lwage sobre exper y union"
+        placeholder={T("chat.placeholder")}
         role="combobox"
         aria-expanded={open}
         aria-controls="composer-suggest"
@@ -641,7 +652,7 @@ export const Composer = forwardRef<
         <button
           type="button"
           className="ghost"
-          title="Nueva conversación (el panel se conserva)"
+          title={T("chat.newConversationTitle")}
           onClick={onReset}
           disabled={busy}
         >
@@ -652,7 +663,7 @@ export const Composer = forwardRef<
             type="button"
             className="send stop"
             onClick={onStop}
-            title="Detener"
+            title={T("chat.stop")}
           >
             <Square size={14} />
           </button>
@@ -661,7 +672,7 @@ export const Composer = forwardRef<
             type="submit"
             className="send"
             disabled={!input.trim()}
-            title="Enviar"
+            title={T("chat.send")}
           >
             <ArrowUp size={16} />
           </button>

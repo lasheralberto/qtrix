@@ -9,4 +9,5 @@ contextBridge.exposeInMainWorld("qtrix", {
   getHome: () => ipcRenderer.invoke("home:get"),
   chooseFolder: () => ipcRenderer.invoke("dialog:choose-folder"),
   setHome: (p, move) => ipcRenderer.invoke("home:set", { path: p, move }),
+  exportPdf: (name) => ipcRenderer.invoke("report:pdf", name),
 });

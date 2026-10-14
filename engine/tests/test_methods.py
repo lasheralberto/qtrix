@@ -55,3 +55,12 @@ def test_methods_endpoint(tmp_path):
     assert [a["id"] for a in areas][:2] == ["data", "cross_section"]
     ols = next(m for a in areas for m in a["methods"] if m["id"] == "ols")
     assert ols["available"] and ols["missing"] == [] and "«y»" in ols["prompt"]
+
+
+def test_tool_help_endpoint(tmp_path):
+    c = TestClient(create_app(Settings(home=tmp_path, token=None, local_only=True), with_memory=False))
+    tool = c.get("/methods").json()["areas"][1]["methods"][0]["tools"][0]
+    info = c.get(f"/tools/{tool}/help").json()
+    assert info["name"] == tool and info["summary"]
+    assert all({"name", "type", "required", "default", "doc"} <= p.keys() for p in info["params"])
+    assert c.get("/tools/nope/help").status_code == 404

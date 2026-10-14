@@ -11,6 +11,7 @@ import {
   type Recommended,
   type RepoFiles,
 } from "./api";
+import { T } from "./i18n";
 
 const ACTIVE: Job["status"][] = ["queued", "running", "verifying"];
 const CTX_SIZES = [8192, 16384, 32768, 65536, 131072];
@@ -26,15 +27,15 @@ function Progress({ job, onCancel }: { job: Job; onCancel(): void }) {
         </span>
         <span className="muted small">
           {job.status === "error"
-            ? "error"
+            ? T("models.statusError")
             : job.status === "done"
-              ? "completado"
+              ? T("models.statusDone")
               : job.status === "cancelled"
-                ? "cancelado"
+                ? T("models.statusCancelled")
                 : `${formatBytes(job.done)}${job.total ? ` / ${formatBytes(job.total)}` : ""}${pct != null ? ` · ${pct}%` : ""}`}
         </span>
         {running && (
-          <button className="ghost" title="Cancelar" onClick={onCancel}>
+          <button className="ghost" title={T("models.cancel")} onClick={onCancel}>
             <X size={13} />
           </button>
         )}
@@ -59,37 +60,37 @@ function RuntimeCard({ status, onChange }: { status: LocalAIStatus; onChange(): 
       <div className="runtime-head">
         <Cpu size={16} />
         <div>
-          <strong>Motor llama.cpp</strong>
+          <strong>{T("models.engine")}</strong>
           <div className="muted small">
-            {installed ? `Instalado ${installed.tag} · ${installed.variant}` : "No instalado (≈20–40 MB, se descarga una vez)"}
-            {status.runtime.running && status.runtime.model && ` · sirviendo ${status.runtime.model.split(/[\\/]/).pop()}`}
+            {installed ? T("models.installed", { tag: installed.tag, variant: installed.variant }) : T("models.notInstalled")}
+            {status.runtime.running && status.runtime.model && ` · ${T("models.serving", { model: status.runtime.model.split(/[\\/]/).pop() ?? "" })}`}
           </div>
         </div>
         <span className="spacer" />
         {!mac && (
-          <select value={variant} onChange={(e) => setVariant(e.target.value)} title="Aceleración">
+          <select value={variant} onChange={(e) => setVariant(e.target.value)} title={T("models.acceleration")}>
             <option value="cpu">CPU</option>
-            <option value="vulkan">GPU · Vulkan (AMD/Intel/NVIDIA)</option>
-            <option value="cuda">GPU · CUDA (NVIDIA)</option>
+            <option value="vulkan">{T("models.gpuVulkan")}</option>
+            <option value="cuda">{T("models.gpuCuda")}</option>
           </select>
         )}
         <button disabled={!!job} onClick={() => localai.installRuntime(mac ? "cpu" : variant).then(onChange)}>
-          <Download size={14} /> {installed ? "Actualizar" : "Instalar"}
+          <Download size={14} /> {installed ? T("models.update") : T("models.install")}
         </button>
         <select
           value={status.ctx_size}
           onChange={(e) => localai.setContext(Number(e.target.value)).then(onChange)}
-          title="Ventana de contexto: tokens que caben en cada petición (más contexto = más RAM). Si el modelo está cargado, se recarga en el siguiente mensaje."
+          title={T("models.contextTitle")}
         >
           {[...new Set([...CTX_SIZES, status.ctx_size])].sort((a, b) => a - b).map((n) => (
             <option key={n} value={n}>
-              Contexto {n >= 1024 ? `${Math.round(n / 1024)}k` : n}
+              {T("models.context", { size: n >= 1024 ? `${Math.round(n / 1024)}k` : n })}
             </option>
           ))}
         </select>
         {status.runtime.running && (
-          <button className="ghost" title="Detener el modelo cargado y liberar memoria" onClick={() => localai.stopRuntime().then(onChange)}>
-            <Square size={13} /> Detener
+          <button className="ghost" title={T("models.stopTitle")} onClick={() => localai.stopRuntime().then(onChange)}>
+            <Square size={13} /> {T("models.stop")}
           </button>
         )}
       </div>
@@ -126,27 +127,27 @@ function HubBrowser({ onDownload }: { onDownload(repo: string, file: string): vo
           run(async () => setResults(await localai.search(query)));
         }}
       >
-        <input className="grow" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar modelos GGUF: qwen, llama, mistral, gemma…" />
+        <input className="grow" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={T("models.searchPlaceholder")} />
         <button type="submit" disabled={loading}>
-          {loading ? <LoaderCircle size={14} className="spin" /> : <Search size={14} />} Buscar
+          {loading ? <LoaderCircle size={14} className="spin" /> : <Search size={14} />} {T("models.search")}
         </button>
       </form>
       {error && <p className="error small">{error}</p>}
       {open ? (
         <div className="repo-files">
           <button className="ghost" onClick={() => setOpen(null)}>
-            ← resultados
+            {T("models.backToResults")}
           </button>
           <h4>
-            {open.repo} {open.gated && <span className="pill warn">requiere aceptar licencia + token</span>}
+            {open.repo} {open.gated && <span className="pill warn">{T("models.gated")}</span>}
             {open.license && <span className="pill">{open.license}</span>}
           </h4>
           <table className="df-table">
             <thead>
               <tr>
-                <th>Fichero</th>
-                <th>Cuantización</th>
-                <th>Tamaño</th>
+                <th>{T("models.colFile")}</th>
+                <th>{T("models.colQuantization")}</th>
+                <th>{T("models.colSize")}</th>
                 <th />
               </tr>
             </thead>
@@ -157,30 +158,30 @@ function HubBrowser({ onDownload }: { onDownload(repo: string, file: string): vo
                   <tr key={f.name}>
                     <td>
                       {f.name}
-                      {f.files.length > 1 && <span className="muted small"> ({f.files.length} partes)</span>}
+                      {f.files.length > 1 && <span className="muted small"> ({T("models.parts", { count: f.files.length })})</span>}
                     </td>
                     <td>{f.quant ?? "—"}</td>
                     <td className="num">{formatBytes(f.size)}</td>
                     <td>
                       <button onClick={() => onDownload(open.repo, f.name)}>
-                        <Download size={13} /> Descargar
+                        <Download size={13} /> {T("models.download")}
                       </button>
                     </td>
                   </tr>
                 ))}
             </tbody>
           </table>
-          <p className="muted small">Q4_K_M es el mejor punto de partida: buena calidad con un cuarto del tamaño original.</p>
+          <p className="muted small">{T("models.quantHint")}</p>
         </div>
       ) : (
         results && (
           <ul className="repo-list">
-            {results.length === 0 && <li className="muted">Sin resultados</li>}
+            {results.length === 0 && <li className="muted">{T("models.noResults")}</li>}
             {results.map((r) => (
               <li key={r.repo}>
                 <button className="repo" onClick={() => run(async () => setOpen(await localai.repo(r.repo)))}>
                   <span>{r.repo}</span>
-                  <span className="muted small">{r.downloads?.toLocaleString("es-ES")} descargas</span>
+                  <span className="muted small">{T("models.downloads", { count: r.downloads?.toLocaleString("en-US") ?? "" })}</span>
                 </button>
               </li>
             ))}
@@ -235,8 +236,8 @@ export function ModelsModal({ onClose }: { onClose(): void }) {
       <div className="modal wide models" onClick={(e) => e.stopPropagation()}>
         <header>
           <Cpu size={16} />
-          <h2>Modelos locales</h2>
-          <span className="muted small">Se guardan en {status?.models_dir ?? "…"} y se ejecutan en tu máquina · elígelos en el selector del chat</span>
+          <h2>{T("models.title")}</h2>
+          <span className="muted small">{T("models.subtitle", { dir: status?.models_dir ?? "…" })}</span>
           <button className="ghost" onClick={onClose}>
             <X size={16} />
           </button>
@@ -257,13 +258,13 @@ export function ModelsModal({ onClose }: { onClose(): void }) {
           )}
           <nav className="tabs">
             <button className={tab === "recommended" ? "on" : ""} onClick={() => setTab("recommended")}>
-              Recomendados
+              {T("models.tabRecommended")}
             </button>
             <button className={tab === "hub" ? "on" : ""} onClick={() => setTab("hub")}>
-              Buscar en Hugging Face
+              {T("models.tabHub")}
             </button>
             <button className={tab === "local" ? "on" : ""} onClick={() => setTab("local")}>
-              Descargados ({models.length})
+              {T("models.tabLocal", { count: models.length })}
             </button>
           </nav>
 
@@ -277,15 +278,15 @@ export function ModelsModal({ onClose }: { onClose(): void }) {
                     <h4>{r.title}</h4>
                     <p className="muted small">{r.note}</p>
                     <p className="small">
-                      {r.size_gb} GB · ≈{r.ram_gb} GB de RAM · <span className="muted">{r.repo}</span>
+                      {T("models.sizeRam", { size: r.size_gb, ram: r.ram_gb })} · <span className="muted">{r.repo}</span>
                     </p>
                     {local ? (
                       <span className={`pill ${local.active ? "ok" : ""}`}>
-                        <Check size={12} /> {local.active ? "en uso" : "descargado"}
+                        <Check size={12} /> {local.active ? T("models.inUse") : T("models.downloaded")}
                       </span>
                     ) : (
                       <button disabled={downloading} onClick={() => download(r.repo, r.file)}>
-                        {downloading ? <LoaderCircle size={13} className="spin" /> : <Download size={13} />} Descargar
+                        {downloading ? <LoaderCircle size={13} className="spin" /> : <Download size={13} />} {T("models.download")}
                       </button>
                     )}
                   </article>
@@ -299,15 +300,15 @@ export function ModelsModal({ onClose }: { onClose(): void }) {
           {tab === "local" && (
             <div className="table-scroll">
               {models.length === 0 ? (
-                <p className="muted">Aún no hay modelos. Descarga uno de los recomendados o busca en Hugging Face.</p>
+                <p className="muted">{T("models.empty")}</p>
               ) : (
                 <table className="df-table">
                   <thead>
                     <tr>
-                      <th>Modelo</th>
-                      <th>Cuant.</th>
-                      <th>Tamaño</th>
-                      <th>Origen</th>
+                      <th>{T("models.colModel")}</th>
+                      <th>{T("models.colQuant")}</th>
+                      <th>{T("models.colSize")}</th>
+                      <th>{T("models.colSource")}</th>
                       <th />
                     </tr>
                   </thead>
@@ -315,17 +316,17 @@ export function ModelsModal({ onClose }: { onClose(): void }) {
                     {models.map((m) => (
                       <tr key={m.id}>
                         <td>
-                          {m.name} {m.active && <span className="pill ok">activo</span>} {m.serving && <span className="pill">cargado</span>}
+                          {m.name} {m.active && <span className="pill ok">{T("models.active")}</span>} {m.serving && <span className="pill">{T("models.loaded")}</span>}
                         </td>
                         <td>{m.quant ?? "—"}</td>
                         <td className="num">{formatBytes(m.size)}</td>
-                        <td className="muted small">{m.repo ?? "copiado a mano"}</td>
+                        <td className="muted small">{m.repo ?? T("models.manualCopy")}</td>
                         <td className="row-actions">
                           <button
                             className="ghost danger"
-                            title="Eliminar del disco"
+                            title={T("models.deleteTitle")}
                             onClick={() => {
-                              if (confirm(`¿Eliminar ${m.name} (${formatBytes(m.size)}) del disco?`)) localai.remove(m.id).then(refresh);
+                              if (confirm(T("models.confirmDelete", { name: m.name, size: formatBytes(m.size) }))) localai.remove(m.id).then(refresh);
                             }}
                           >
                             <Trash2 size={14} />
@@ -336,17 +337,17 @@ export function ModelsModal({ onClose }: { onClose(): void }) {
                   </tbody>
                 </table>
               )}
-              {installedNames.size > 0 && <p className="muted small">También puedes copiar ficheros .gguf a la carpeta de modelos: aparecerán aquí.</p>}
+              {installedNames.size > 0 && <p className="muted small">{T("models.copyHint")}</p>}
             </div>
           )}
         </div>
         <footer className="models-foot">
           <KeyRound size={14} />
-          <span className="small">Token de Hugging Face (opcional, para modelos con licencia restringida)</span>
+          <span className="small">{T("models.tokenLabel")}</span>
           <input
             type="password"
             value={token}
-            placeholder={status?.hf_token ? "•••••••• guardado en el llavero" : "hf_…"}
+            placeholder={status?.hf_token ? T("models.tokenSaved") : "hf_…"}
             onChange={(e) => setToken(e.target.value)}
           />
           <button
@@ -358,12 +359,12 @@ export function ModelsModal({ onClose }: { onClose(): void }) {
                 .then(refresh)
             }
           >
-            Guardar
+            {T("models.save")}
           </button>
           <span className="spacer" />
           {status && window.qtrix?.openPath && (
             <button className="ghost" onClick={() => window.qtrix?.openPath(status.models_dir)}>
-              <FolderOpen size={14} /> Abrir carpeta
+              <FolderOpen size={14} /> {T("models.openFolder")}
             </button>
           )}
         </footer>

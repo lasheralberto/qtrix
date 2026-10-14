@@ -1,9 +1,10 @@
 // What the user writes in the panel (E7·08d): the ribbon under the title, notes and Python cells.
-import { Bot, Check, CircleAlert, Code2, LoaderCircle, NotebookPen, Play, Plus } from "lucide-react";
+import { Check, CircleAlert, Code2, LoaderCircle, NotebookPen, Play, Plus } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { api, type Block, type KernelOutput, type PanelCellRun } from "./api";
 import { Markdown, PlotlyFigure } from "./blocks";
 import { CodeEditor } from "./cells";
+import { T } from "./i18n";
 
 const ANSI = /\u001b\[[0-9;]*m/g;
 
@@ -35,9 +36,9 @@ function Output({ out }: { out: KernelOutput }) {
   if (out.type === "stream") return <pre className={`cell-raw ${out.name === "stderr" ? "stderr" : ""}`}>{out.text}</pre>;
   const d = out.data;
   if (d["application/vnd.plotly.v1+json"]) return <PlotlyFigure data={d["application/vnd.plotly.v1+json"]} />;
-  if (d["image/png"]) return <img className="cell-img" alt="figura" src={`data:image/png;base64,${d["image/png"]}`} />;
+  if (d["image/png"]) return <img className="cell-img" alt={T("notebook.figure")} src={`data:image/png;base64,${d["image/png"]}`} />;
   if (d["image/svg+xml"])
-    return <img className="cell-img" alt="figura" src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(d["image/svg+xml"])}`} />;
+    return <img className="cell-img" alt={T("notebook.figure")} src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(d["image/svg+xml"])}`} />;
   if (d["text/html"]) return <HtmlOutput html={d["text/html"]} />;
   if (d["text/markdown"]) return <Markdown text={d["text/markdown"]} />;
   if (d["application/json"]) return <pre className="cell-raw">{JSON.stringify(d["application/json"], null, 2)}</pre>;
@@ -52,7 +53,7 @@ export function CellOutcome({ run }: { run: PanelCellRun }) {
       <Check size={13} />
       <span>
         {run.versions.map((v) => `${v.name} → v${v.version}`).join(", ")}
-        {run.stale.length > 0 && <> · desactualizados: {run.stale.join(", ")}</>}
+        {run.stale.length > 0 && <> · {T("notebook.staleList", { names: run.stale.join(", ") })}</>}
       </span>
     </div>
   );
@@ -63,7 +64,7 @@ export function CellOutcome({ run }: { run: PanelCellRun }) {
           <div key={i} className={`cell-note ${c.ok || c.skipped ? "" : "fail"}`}>
             {c.ok ? <Check size={13} /> : <CircleAlert size={13} />}
             <span>
-              <code>{c.tool}</code> {c.ok ? "ejecutada" : c.skipped ? "no se ejecutó" : c.error}
+              <code>{c.tool}</code> {c.ok ? T("notebook.executed") : c.skipped ? T("notebook.notExecuted") : c.error}
             </span>
           </div>
         ))}
@@ -90,7 +91,7 @@ export function CellOutcome({ run }: { run: PanelCellRun }) {
           )}
         </div>
       )}
-      {run.ok && !run.outputs?.length && !run.versions.length && <div className="cell-note">Ejecutada sin salida</div>}
+      {run.ok && !run.outputs?.length && !run.versions.length && <div className="cell-note">{T("notebook.executedNoOutput")}</div>}
       {changed}
     </>
   );
@@ -124,7 +125,7 @@ export function NoteEditor(props: { title?: string; markdown?: string; onSave(ti
     if (!text.trim() || saving) return;
     setSaving(true);
     try {
-      await props.onSave(title.trim() || "Nota", text);
+      await props.onSave(title.trim() || T("notebook.note"), text);
     } catch (e) {
       setError((e as Error).message);
       setSaving(false);
@@ -133,14 +134,14 @@ export function NoteEditor(props: { title?: string; markdown?: string; onSave(ti
 
   return (
     <div className="note-editor" onKeyDown={editorKeys(save, props.onCancel)}>
-      <input className="note-title" placeholder="Título de la nota" value={title} onChange={(e) => setTitle(e.target.value)} />
+      <input className="note-title" placeholder={T("notebook.noteTitle")} value={title} onChange={(e) => setTitle(e.target.value)} />
       {preview ? (
-        <div className="note-preview">{text.trim() ? <Markdown text={text} /> : <span className="muted">Nada que previsualizar</span>}</div>
+        <div className="note-preview">{text.trim() ? <Markdown text={text} /> : <span className="muted">{T("notebook.nothingToPreview")}</span>}</div>
       ) : (
         <textarea
           ref={area}
           rows={6}
-          placeholder="Escribe en Markdown; fórmulas entre $…$"
+          placeholder={T("notebook.markdownPlaceholder")}
           value={text}
           onChange={(e) => setText(e.target.value)}
         />
@@ -149,19 +150,19 @@ export function NoteEditor(props: { title?: string; markdown?: string; onSave(ti
       <div className="editor-bar">
         <div className="tabs-mini">
           <button type="button" className={!preview ? "on" : ""} onClick={() => setPreview(false)}>
-            Escribir
+            {T("notebook.write")}
           </button>
           <button type="button" className={preview ? "on" : ""} onClick={() => setPreview(true)}>
-            Vista previa
+            {T("notebook.preview")}
           </button>
         </div>
         <span className="spacer" />
-        <span className="muted small">Ctrl+Enter guarda · Esc cancela</span>
+        <span className="muted small">{T("notebook.saveHint")}</span>
         <button type="button" className="ghost" onClick={props.onCancel}>
-          Cancelar
+          {T("notebook.cancel")}
         </button>
         <button type="button" className="primary" onClick={save} disabled={!text.trim() || saving}>
-          {saving ? <LoaderCircle size={14} className="spin" /> : <Check size={14} />} Guardar
+          {saving ? <LoaderCircle size={14} className="spin" /> : <Check size={14} />} {T("notebook.save")}
         </button>
       </div>
     </div>
@@ -179,15 +180,15 @@ function CellEditor(props: { initial: string; running: boolean; onRun(code: stri
     <div className="py-cell" onKeyDown={props.onCancel ? editorKeys(run, props.onCancel) : undefined}>
       <CodeEditor value={code} editable={!props.running} onChange={setCode} onRun={run} diagnostics={[]} autoFocus={props.autoFocus} />
       <div className="editor-bar">
-        <span className="muted small">Python en el kernel del proyecto · Ctrl+Enter ejecuta{props.onCancel ? " · Esc cancela" : ""}</span>
+        <span className="muted small">{T(props.onCancel ? "notebook.pythonHintCancel" : "notebook.pythonHint")}</span>
         <span className="spacer" />
         {props.onCancel && (
           <button type="button" className="ghost" onClick={props.onCancel} disabled={props.running}>
-            Cancelar
+            {T("notebook.cancel")}
           </button>
         )}
         <button type="button" className="primary" onClick={run} disabled={!code.trim() || props.running}>
-          {props.running ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />} Ejecutar
+          {props.running ? <LoaderCircle size={14} className="spin" /> : <Play size={14} />} {T("notebook.run")}
         </button>
       </div>
     </div>
@@ -224,19 +225,16 @@ export function PythonCellBody({ block }: { block: Block }) {
 export type Draft = "note" | "python";
 
 /** The notebook's toolbar under its title, as in Jupyter: add a Python cell or a note at the end, or ask the agent. */
-export function NotebookRibbon(props: { draft: Draft | null; onAdd(kind: Draft): void; onAskAI(): void; children?: ReactNode }) {
+export function NotebookRibbon(props: { draft: Draft | null; onAdd(kind: Draft): void; children?: ReactNode }) {
   return (
-    <div className="nb-ribbon" role="toolbar" aria-label="Cuaderno">
-      <button className={`ghost ${props.draft === "python" ? "on" : ""}`} title="Añadir celda de Python al final" onClick={() => props.onAdd("python")}>
+    <div className="nb-ribbon" role="toolbar" aria-label={T("notebook.notebook")}>
+      <button className={`ghost ${props.draft === "python" ? "on" : ""}`} title={T("notebook.addPythonCell")} onClick={() => props.onAdd("python")}>
         <Plus size={15} />
-        <Code2 size={15} /> Código
+        <Code2 size={15} /> {T("notebook.code")}
       </button>
-      <button className={`ghost ${props.draft === "note" ? "on" : ""}`} title="Añadir nota en Markdown al final" onClick={() => props.onAdd("note")}>
+      <button className={`ghost ${props.draft === "note" ? "on" : ""}`} title={T("notebook.addMarkdownNote")} onClick={() => props.onAdd("note")}>
         <Plus size={15} />
-        <NotebookPen size={15} /> Nota
-      </button>
-      <button className="ghost" title="Escribe al equipo econométrico en el chat" onClick={props.onAskAI}>
-        <Bot size={15} /> Preguntar a la IA
+        <NotebookPen size={15} /> {T("notebook.note")}
       </button>
       {props.children && <span className="ribbon-sep" />}
       {props.children}
@@ -270,8 +268,8 @@ export function DraftCell({ kind, onClose }: { kind: Draft; onClose(): void }) {
     return (
       <article ref={card} className="block draft-cell">
         <header>
-          <span className="block-kind">Nota</span>
-          <h3>Nueva nota</h3>
+          <span className="block-kind">{T("notebook.note")}</span>
+          <h3>{T("notebook.newNote")}</h3>
         </header>
         <div className="block-body">
           <NoteEditor onSave={(t, m) => api.addNote(t, m).then(onClose)} onCancel={onClose} />
@@ -283,7 +281,7 @@ export function DraftCell({ kind, onClose }: { kind: Draft; onClose(): void }) {
     <article ref={card} className="block draft-cell wide">
       <header>
         <span className="block-kind">Python</span>
-        <h3>Nueva celda</h3>
+        <h3>{T("notebook.newCell")}</h3>
       </header>
       <div className="block-body flush">
         <CellEditor initial="" running={running} onRun={runCell} onCancel={onClose} />

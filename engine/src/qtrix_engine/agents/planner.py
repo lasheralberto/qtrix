@@ -82,7 +82,7 @@ class Plan:
 
 
 #: Sections of the agent's workspace it can write to; plan, tasks and progress come from the plan and the cells.
-NoteSection = Literal["idea", "conclusion", "result"]
+NoteSection = Literal["idea", "conclusion", "issue", "result"]
 
 
 @dataclass
@@ -231,11 +231,12 @@ def scratch_note(section: NoteSection, text: str) -> str:
 
     Use it sparingly, only when it adds something the cells do not show: an "idea" when you weigh alternatives
     before choosing (approach and why), a "conclusion" when a key result settles a question (provisional,
-    with the number behind it), a "result" for a deliverable the turn produced (an object, a table, a decision).
+    with the number behind it), an "issue" for a caveat the analyst must keep in mind (a failed assumption, weak
+    identification, a data problem that limits the estimate; never a tool error you fixed), a "result" for a deliverable the turn produced (an object, a table, a decision).
     One or two sentences, in the user's language. Operational summaries only: never your internal deliberation.
 
     Args:
-        section: "idea", "conclusion" or "result".
+        section: "idea", "conclusion", "issue" or "result".
         text: The note, one or two sentences.
     """
     check_tools_allowed()

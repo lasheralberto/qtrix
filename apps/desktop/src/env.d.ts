@@ -8,6 +8,7 @@ interface QtrixBridge {
   getHome(): Promise<{ home: string; defaultHome: string }>;
   chooseFolder(): Promise<string | null>;
   setHome(path: string, move: boolean): Promise<{ ok: boolean; error?: string }>;
+  exportPdf(name: string): Promise<{ ok: boolean; path?: string; error?: string }>;
 }
 
 interface Window {

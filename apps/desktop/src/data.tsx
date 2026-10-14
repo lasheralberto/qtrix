@@ -2,34 +2,35 @@
 import { Database, FileUp, Sparkles, Table2, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type Dataset, type Freq, type PageKind, type SampleInfo, type StructureSpec } from "./api";
+import { T } from "./i18n";
 
 const KIND_LABEL: Record<PageKind, string> = {
-  cross_section: "Corte transversal",
-  time_series: "Serie temporal",
-  panel: "Panel con fechas",
-  panel_undated: "Panel sin fechas",
+  cross_section: T("data.kindCrossSection"),
+  time_series: T("data.kindTimeSeries"),
+  panel: T("data.kindPanel"),
+  panel_undated: T("data.kindPanelUndated"),
 };
 const FREQ_LABEL: Record<Exclude<Freq, "U">, string> = {
-  A: "Anual",
-  S: "Semestral",
-  Q: "Trimestral",
-  M: "Mensual",
-  W: "Semanal",
-  D5: "Diaria (5 días)",
-  D7: "Diaria (7 días)",
+  A: T("data.freqAnnual"),
+  S: T("data.freqSemiannual"),
+  Q: T("data.freqQuarterly"),
+  M: T("data.freqMonthly"),
+  W: T("data.freqWeekly"),
+  D5: T("data.freqDaily5"),
+  D7: T("data.freqDaily7"),
 };
 
 function structureLabel(d: Dataset): string {
-  if (d.kind === "cross_section") return "corte transversal";
-  if (d.kind === "panel_undated") return `panel ${d.id_col} × ${d.t_col}`;
+  if (d.kind === "cross_section") return T("data.structureCrossSection");
+  if (d.kind === "panel_undated") return T("data.structurePanelUndated", { id: d.id_col!, t: d.t_col! });
   const freq = FREQ_LABEL[d.freq as Exclude<Freq, "U">]?.toLowerCase() ?? d.freq;
   const range = `${d.start}–${d.end}`;
-  return d.kind === "panel" ? `panel ${d.id_col} · ${freq} ${range}` : `${freq} ${range}`;
+  return d.kind === "panel" ? T("data.structurePanel", { id: d.id_col!, freq, range }) : `${freq} ${range}`;
 }
 
 const SAMPLE_HINT: Record<PageKind, string> = {
-  cross_section: "@all · 1 500 · if edad >= 25 and mujer = 1",
-  time_series: "@all · 1990q1 2008q4 · @first 2000q4 if desempleo > 5",
+  cross_section: T("data.sampleHintCross"),
+  time_series: T("data.sampleHintTs"),
   panel: "@all · 2002 2005 · if educ > 10",
   panel_undated: "@all · 2 3 · if score > 0",
 };
@@ -62,7 +63,7 @@ function SampleEditor({ dataset, onSaved }: { dataset: Dataset; onSaved(): void 
   return (
     <div className="sample">
       <div className="panel-structure">
-        <span>Muestra</span>
+        <span>{T("data.sample")}</span>
         <input
           className="sample-input"
           value={text}
@@ -71,11 +72,11 @@ function SampleEditor({ dataset, onSaved }: { dataset: Dataset; onSaved(): void 
           onKeyDown={(e) => e.key === "Enter" && save(text.trim() || null)}
         />
         <button disabled={saving} onClick={() => save(text.trim() || null)}>
-          Aplicar
+          {T("data.apply")}
         </button>
         {dataset.sample && (
           <button className="ghost" disabled={saving} onClick={() => save(null)}>
-            Todas
+            {T("data.all")}
           </button>
         )}
       </div>
@@ -130,19 +131,19 @@ function StructureEditor({ dataset, onSaved }: { dataset: Dataset; onSaved(): vo
         <div className="structure-suggest">
           <Sparkles size={14} />
           <span>
-            Parece <b>{KIND_LABEL[s.kind].toLowerCase()}</b> {FREQ_LABEL[s.freq as Exclude<Freq, "U">]?.toLowerCase()}{" "}
+            {T("data.looksLike")} <b>{KIND_LABEL[s.kind].toLowerCase()}</b> {FREQ_LABEL[s.freq as Exclude<Freq, "U">]?.toLowerCase()}{" "}
             {s.start}–{s.end}: {s.reason}.
           </span>
           <button
             disabled={saving}
             onClick={() => save({ kind: s.kind, freq: s.freq, date_col: s.date_col, id_col: s.id_col })}
           >
-            Aplicar
+            {T("data.apply")}
           </button>
         </div>
       )}
       <div className="panel-structure">
-        <span>Estructura</span>
+        <span>{T("data.structure")}</span>
         <select value={spec.kind} onChange={(e) => set({ kind: e.target.value as PageKind })}>
           {(Object.keys(KIND_LABEL) as PageKind[]).map((k) => (
             <option key={k} value={k}>
@@ -150,12 +151,12 @@ function StructureEditor({ dataset, onSaved }: { dataset: Dataset; onSaved(): vo
             </option>
           ))}
         </select>
-        {needsId && colSelect(spec.id_col, (v) => set({ id_col: v }), "entidad…")}
-        {dated && colSelect(spec.date_col, (v) => set({ date_col: v }), "fecha…")}
-        {spec.kind === "panel_undated" && colSelect(spec.t_col, (v) => set({ t_col: v }), "índice t…")}
+        {needsId && colSelect(spec.id_col, (v) => set({ id_col: v }), T("data.entityPlaceholder"))}
+        {dated && colSelect(spec.date_col, (v) => set({ date_col: v }), T("data.datePlaceholder"))}
+        {spec.kind === "panel_undated" && colSelect(spec.t_col, (v) => set({ t_col: v }), T("data.timeIndexPlaceholder"))}
         {dated && (
           <select value={spec.freq ?? ""} onChange={(e) => set({ freq: (e.target.value || null) as Freq | null })}>
-            <option value="">frecuencia (auto)</option>
+            <option value="">{T("data.frequencyAuto")}</option>
             {Object.entries(FREQ_LABEL).map(([f, label]) => (
               <option key={f} value={f}>
                 {label}
@@ -166,15 +167,15 @@ function StructureEditor({ dataset, onSaved }: { dataset: Dataset; onSaved(): vo
         {spec.kind === "time_series" && !spec.date_col && (
           <input
             className="short"
-            placeholder="inicio, p. ej. 1990Q1"
+            placeholder={T("data.startPlaceholder")}
             value={spec.start ?? ""}
             onChange={(e) => set({ start: e.target.value || null })}
           />
         )}
         <button disabled={saving} onClick={() => save(spec)}>
-          Guardar
+          {T("data.save")}
         </button>
-        <span className="muted small">{dataset.gaps > 0 && `${dataset.gaps} periodos vacíos añadidos`}</span>
+        <span className="muted small">{dataset.gaps > 0 && T("data.gapsAdded", { count: dataset.gaps })}</span>
       </div>
       {error && <p className="error structure-error">{error}</p>}
     </div>
@@ -220,11 +221,11 @@ export function DatasetList(props: {
     >
       <div className="side-title">
         <span>
-          Datos <span className="count">{props.datasets.length}</span>
+          {T("data.title")} <span className="count">{props.datasets.length}</span>
         </span>
         <button
           className="ghost"
-          title="Importar CSV, Parquet o Excel"
+          title={T("data.importTitle")}
           disabled={importing}
           onClick={async () => importPaths((await window.qtrix?.openDataFiles()) ?? [])}
         >
@@ -232,7 +233,7 @@ export function DatasetList(props: {
         </button>
       </div>
       {props.datasets.length === 0 && (
-        <p className="muted small drop-hint">Arrastra aquí CSV, Parquet o Excel. Los datos se quedan en tu máquina.</p>
+        <p className="muted small drop-hint">{T("data.dropHint")}</p>
       )}
       <ul>
         {props.datasets.map((d) => (
@@ -241,8 +242,8 @@ export function DatasetList(props: {
               <Database size={14} />
               <span className="ds-name">{d.name}</span>
               {d.suggestion && (
-                <span className="ds-suggest" title={`¿${KIND_LABEL[d.suggestion.kind].toLowerCase()}?`}>
-                  ¿?
+                <span className="ds-suggest" title={T("data.suggestTitle", { kind: KIND_LABEL[d.suggestion.kind].toLowerCase() })}>
+                  {T("data.suggestMark")}
                 </span>
               )}
               <span className="ds-meta" title={structureLabel(d)}>
@@ -252,7 +253,7 @@ export function DatasetList(props: {
           </li>
         ))}
       </ul>
-      {importing && <p className="muted small">Importando…</p>}
+      {importing && <p className="muted small">{T("data.importing")}</p>}
     </div>
   );
 }
@@ -274,7 +275,7 @@ export function DatasetModal({ dataset, onClose, onChange }: { dataset: Dataset;
           <Table2 size={16} />
           <h2>{dataset.name}</h2>
           <span className="muted small">
-            {dataset.n_rows.toLocaleString("es-ES")} filas · {dataset.columns.length} columnas · {dataset.source}
+            {T("data.datasetSummary", { rows: dataset.n_rows.toLocaleString("es-ES"), cols: dataset.columns.length, source: dataset.source })}
           </span>
           <button className="ghost" onClick={onClose}>
             <X size={16} />
@@ -288,18 +289,18 @@ export function DatasetModal({ dataset, onClose, onChange }: { dataset: Dataset;
           <button
             className="danger ghost"
             onClick={() => {
-              if (confirm(`¿Eliminar el dataset ${dataset.name}?`)) api.deleteDataset(dataset.id).then(() => (onChange(), onClose()));
+              if (confirm(T("data.confirmDelete", { name: dataset.name }))) api.deleteDataset(dataset.id).then(() => (onChange(), onClose()));
             }}
           >
-            <Trash2 size={14} /> Eliminar
+            <Trash2 size={14} /> {T("data.delete")}
           </button>
         </div>
         <nav className="tabs">
           <button className={tab === "preview" ? "on" : ""} onClick={() => setTab("preview")}>
-            Vista previa
+            {T("data.preview")}
           </button>
           <button className={tab === "profile" ? "on" : ""} onClick={() => setTab("profile")}>
-            Perfil de variables
+            {T("data.profile")}
           </button>
         </nav>
         <div className="table-scroll modal-table">
@@ -329,7 +330,7 @@ export function DatasetModal({ dataset, onClose, onChange }: { dataset: Dataset;
             <table className="df-table">
               <thead>
                 <tr>
-                  {["variable", "tipo", "missing", "únicos", "media", "sd", "min", "max"].map((h) => (
+                  {[T("data.colVariable"), T("data.colType"), T("data.colMissing"), T("data.colUnique"), T("data.colMean"), T("data.colSd"), T("data.colMin"), T("data.colMax")].map((h) => (
                     <th key={h}>{h}</th>
                   ))}
                 </tr>

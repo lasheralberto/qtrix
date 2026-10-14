@@ -37,8 +37,10 @@ def scripted(steps: list[str], script: list, *, final: str | None = "Resumen fin
         out = info.output_tools[0]
         if "findings" in out.parameters_json_schema["properties"]:  # the explainer: one finding per cell asked
             ids = re.findall(r"^### Cell (\S+)", last_prompt(messages), re.M)
+            concl = ["Conclusión del turno"] if "Answer written for the turn" in last_prompt(messages) else []
             return ModelResponse(parts=[ToolCallPart(out.name, {"findings": [
-                {"id": i, "finding": f"Hallazgo de {i}"} for i in ids]})])
+                {"id": i, "finding": f"Hallazgo de {i}"} for i in ids], "conclusions": concl,
+                "issues": ["Heterocedasticidad probable"] if concl else []})])
         return ModelResponse(parts=[ToolCallPart(out.name, {"steps": steps, **(draft or {})})])
 
     async def run(messages, info: AgentInfo):
@@ -165,6 +167,16 @@ def test_each_cell_carries_the_finding_the_model_wrote_after_it(tmp_path, wages_
     assert [cell.get("finding") for cell in turn["cells"]] == [found[1]["text"], f"Hallazgo de {calls[1]}"]
 
 
+def test_the_workspace_gets_conclusions_and_objects_even_when_the_model_wrote_none(tmp_path, wages_csv):
+    c = client(tmp_path, wages_csv, scripted([], [("ols_fit", FIT), "El retorno de la educación es 0.08."]),
+               planner=False)
+    evs = events(c.post("/chat", json={"message": "retorno de la educación"}))
+    notes = [e for e in evs if e["type"] == "scratch"][-1]["notes"]
+    assert {"section": "conclusion", "text": "Conclusión del turno"} in notes
+    assert {"section": "issue", "text": "Heterocedasticidad probable"} in notes
+    assert any(n["section"] == "result" and "Objetos creados" in n["text"] for n in notes)
+
+
 def test_resumable_drops_unanswered_tool_calls():
     msgs = [ModelRequest(parts=[UserPromptPart("x")]), ModelResponse(parts=[ToolCallPart("f", {})]),
             ModelRequest(parts=[])]
@@ -177,6 +189,7 @@ def test_the_workspace_collects_goal_alternatives_and_the_agents_notes(tmp_path,
         ("scratch_note", {"section": "idea", "text": "Errores HC1: la varianza puede depender de educ."}),
         ("ols_fit", FIT), ("plan_update", {"step": 1, "note": "eq_educ"}),
         ("scratch_note", {"section": "conclusion", "text": "Cada año de educación eleva el salario un 8%."}),
+        ("scratch_note", {"section": "issue", "text": "Posible heterocedasticidad: usar errores robustos."}),
         ("scratch_note", {"section": "nope", "text": "x"}),  # an unknown section is refused and retried
         ("scratch_note", {"section": "result", "text": "eq_educ estimado."}),
         "El retorno de la educación es 0.08.",
@@ -188,7 +201,7 @@ def test_the_workspace_collects_goal_alternatives_and_the_agents_notes(tmp_path,
     pads = [e for e in evs if e["type"] == "scratch"]
     assert pads[0]["goal"] == "Medir el retorno de la educación"
     assert [n["section"] for n in pads[0]["notes"]] == ["idea", "idea"]
-    assert [n["section"] for n in pads[-1]["notes"]] == ["idea", "idea", "idea", "conclusion", "result"]
+    assert [n["section"] for n in pads[-1]["notes"]] == ["idea", "idea", "idea", "conclusion", "issue", "result"]
     # Workspace bookkeeping is not a Python cell and does not leak into the answer.
     assert [e["name"] for e in evs if e["type"] == "tool_call"] == ["ols_fit"]
     assert text(evs).strip().endswith("El retorno de la educación es 0.08.")

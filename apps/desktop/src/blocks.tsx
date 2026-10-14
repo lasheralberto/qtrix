@@ -8,16 +8,17 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { api, type Block } from "./api";
+import { T } from "./i18n";
 import { NoteEditor, PythonCellBody } from "./notebook";
 
 const KIND_LABEL: Record<Block["kind"], string> = {
-  regression_table: "Regresión",
-  plotly_figure: "Gráfico",
-  dataframe: "Tabla",
-  diagnostics: "Diagnóstico",
-  markdown: "Nota",
-  equation: "Ecuación",
-  python_cell: "Python",
+  regression_table: T("blocks.kindRegression"),
+  plotly_figure: T("blocks.kindPlot"),
+  dataframe: T("blocks.kindTable"),
+  diagnostics: T("blocks.kindDiagnostics"),
+  markdown: T("blocks.kindNote"),
+  equation: T("blocks.kindEquation"),
+  python_cell: T("blocks.kindPython"),
 };
 
 const fmt = (v: unknown, digits = 3) => {
@@ -84,23 +85,23 @@ function RegressionTable({ data }: { data: Block["data"] }) {
               })}
             </tr>
           ))}
-          {stat("n_obs", "Observaciones", 0)}
-          {stat("n_entities", "Entidades", 0)}
+          {stat("n_obs", T("blocks.observations"), 0)}
+          {stat("n_entities", T("blocks.entities"), 0)}
           {stat("r2", "R²")}
-          {stat("adj_r2", "R² ajustado")}
+          {stat("adj_r2", T("blocks.adjR2"))}
           {stat("r2_within", "R² within")}
           {stat("pseudo_r2", "Pseudo R²")}
-          {stat("f_stat", "Estadístico F", 2)}
+          {stat("f_stat", T("blocks.fStat"), 2)}
           {stat("aic", "AIC", 1)}
           <tr className="stat-row">
-            <th>Errores estándar</th>
+            <th>{T("blocks.stdErrors")}</th>
             {models.map((m, i) => (
               <td key={i}>{m.cov_type}</td>
             ))}
           </tr>
           {models.some((m) => m.sample) && (
             <tr className="stat-row sample-row">
-              <th>Muestra</th>
+              <th>{T("blocks.sample")}</th>
               {models.map((m, i) => (
                 <td key={i}>{m.sample}</td>
               ))}
@@ -108,7 +109,7 @@ function RegressionTable({ data }: { data: Block["data"] }) {
           )}
         </tbody>
       </table>
-      <p className="table-note">Errores estándar entre paréntesis. * p&lt;0.1, ** p&lt;0.05, *** p&lt;0.01</p>
+      <p className="table-note">{T("blocks.stdErrorsNote")} * p&lt;0.1, ** p&lt;0.05, *** p&lt;0.01</p>
       {models.some((m) => m.iv_diagnostics?.first_stage) && <IvDiagnostics models={models} />}
     </div>
   );
@@ -120,10 +121,10 @@ function IvDiagnostics({ models }: { models: any[] }) {
       {models.map((m, i) =>
         m.iv_diagnostics?.first_stage ? (
           <div key={i}>
-            <strong>Primera etapa ({i + 1})</strong>
+            <strong>{T("blocks.firstStage", { n: i + 1 })}</strong>
             {Object.entries(m.iv_diagnostics.first_stage).map(([k, v]: [string, any]) => (
               <span key={k} className={v.f_stat < 10 ? "pill warn" : "pill ok"}>
-                {k}: F={fmt(v.f_stat, 1)} · R² parcial={fmt(v.partial_r2)}
+                {k}: F={fmt(v.f_stat, 1)} · {T("blocks.partialR2")}={fmt(v.partial_r2)}
               </span>
             ))}
           </div>
@@ -187,7 +188,7 @@ function DataFrame({ data }: { data: Block["data"] }) {
       </table>
       {data.total_rows > (data.rows?.length ?? 0) && (
         <p className="table-note">
-          Mostrando {data.rows.length} de {data.total_rows.toLocaleString("es-ES")} filas
+          {T("blocks.showingRows", { shown: data.rows.length, total: data.total_rows.toLocaleString("es-ES") })}
         </p>
       )}
     </div>
@@ -200,9 +201,9 @@ function Diagnostics({ data }: { data: Block["data"] }) {
       <table className="df-table">
         <thead>
           <tr>
-            <th>Contraste</th>
-            <th>Estadístico</th>
-            <th>p-valor</th>
+            <th>{T("blocks.test")}</th>
+            <th>{T("blocks.statistic")}</th>
+            <th>{T("blocks.pValue")}</th>
             <th>H₀</th>
             <th />
           </tr>
@@ -216,9 +217,9 @@ function Diagnostics({ data }: { data: Block["data"] }) {
               <td className="muted">{t.null_hypothesis}</td>
               <td>
                 {t.reject_5pct == null ? null : t.reject_5pct ? (
-                  <span className="pill warn">rechaza H₀</span>
+                  <span className="pill warn">{T("blocks.rejectsH0")}</span>
                 ) : (
-                  <span className="pill ok">no rechaza</span>
+                  <span className="pill ok">{T("blocks.doesNotReject")}</span>
                 )}
               </td>
             </tr>
@@ -309,47 +310,47 @@ export function BlockCard(props: {
         <span className="block-kind">{KIND_LABEL[block.kind]}</span>
         <h3 title={block.title}>{block.title}</h3>
         {block.ref ? (
-          <span className="pill live" title={`Vista viva de ${block.ref.object}: se actualiza al re-estimar`}>
-            ● vivo
+          <span className="pill live" title={T("blocks.liveTitle", { object: block.ref.object })}>
+            {T("blocks.live")}
           </span>
         ) : block.result_id ? (
-          <span className="pill" title="Congelado: no sigue los cambios del objeto">
-            congelado
+          <span className="pill" title={T("blocks.frozenTitle")}>
+            {T("blocks.frozen")}
           </span>
         ) : null}
         {mine && (
-          <span className="pill mine" title="Lo escribiste tú: el agente lo lee pero no lo modifica">
-            tuyo
+          <span className="pill mine" title={T("blocks.mineTitle")}>
+            {T("blocks.mine")}
           </span>
         )}
         {block.stale && (
-          <span className="pill warn" title="El objeto cambió después de calcular este bloque">
-            desactualizado
+          <span className="pill warn" title={T("blocks.staleTitle")}>
+            {T("blocks.stale")}
           </span>
         )}
         <div className="block-actions">
-          <button title="Preguntar al agente sobre este bloque" onClick={props.onAskAbout}>
+          <button title={T("blocks.askAbout")} onClick={props.onAskAbout}>
             <MessageSquarePlus size={15} />
           </button>
           {block.ref && (
-            <button title="Congelar (deja de seguir al objeto)" onClick={props.onFreeze}>
+            <button title={T("blocks.freeze")} onClick={props.onFreeze}>
               <Snowflake size={15} />
             </button>
           )}
           {mine && block.kind === "markdown" && !editing && (
-            <button title="Editar nota" onClick={() => setEditing(true)}>
+            <button title={T("blocks.editNote")} onClick={() => setEditing(true)}>
               <Pencil size={15} />
             </button>
           )}
           {block.code && !cell && (
-            <button title="Ver código reproducible" onClick={() => setShowCode((s) => !s)} className={showCode ? "on" : ""}>
+            <button title={T("blocks.showCode")} onClick={() => setShowCode((s) => !s)} className={showCode ? "on" : ""}>
               <Code2 size={15} />
             </button>
           )}
-          <button title={block.pinned ? "Desfijar" : "Fijar (el agente no podrá modificarlo)"} onClick={() => props.onPin(!block.pinned)}>
+          <button title={block.pinned ? T("blocks.unpin") : T("blocks.pin")} onClick={() => props.onPin(!block.pinned)}>
             {block.pinned ? <PinOff size={15} /> : <Pin size={15} />}
           </button>
-          <button title="Eliminar" onClick={props.onRemove}>
+          <button title={T("blocks.remove")} onClick={props.onRemove}>
             <X size={15} />
           </button>
         </div>
@@ -383,9 +384,9 @@ export function BlockCard(props: {
       </div>
       {block.result_id && block.kind === "regression_table" && (
         <footer>
-          <button onClick={() => props.onAsk(`Haz los diagnósticos del modelo ${block.result_id} e interprétalos`)}>Diagnósticos</button>
-          <button onClick={() => props.onAsk(`Muestra el gráfico de coeficientes del modelo ${block.result_id}`)}>Coefplot</button>
-          <button onClick={() => props.onAsk(`Comprueba la robustez del modelo ${block.result_id} con especificaciones alternativas`)}>Robustez</button>
+          <button onClick={() => props.onAsk(T("blocks.askDiagnostics", { id: block.result_id! }))}>{T("blocks.diagnostics")}</button>
+          <button onClick={() => props.onAsk(T("blocks.askCoefplot", { id: block.result_id! }))}>{T("blocks.coefplot")}</button>
+          <button onClick={() => props.onAsk(T("blocks.askRobustness", { id: block.result_id! }))}>{T("blocks.robustness")}</button>
         </footer>
       )}
     </article>

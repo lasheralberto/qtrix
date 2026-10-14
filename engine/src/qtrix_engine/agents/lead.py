@@ -44,6 +44,7 @@ from ..workspace import DatasetNotFound
 from . import autocompact as ac
 from . import findings as fx
 from . import planner as pl
+from . import reporting as rp
 from . import skills as sk
 
 LEAD_INSTRUCTIONS = """\
@@ -99,7 +100,8 @@ How you work:
   and plan_revise it when the results call for a different route.
 - You have a workspace the user watches while you work (plan, tasks, progress and findings fill it by themselves).
   Add to it with scratch_note only what the cells do not show: an alternative you weigh before choosing, a
-  provisional conclusion once a key result settles a question, a deliverable at the end. A few notes per turn,
+  provisional conclusion once a key result settles a question, an "issue" for each caveat the analyst must keep
+  in mind (failed assumption, weak identification, data limits; never tool errors you recovered from), a deliverable at the end. A few notes per turn,
   one or two sentences each; never your internal deliberation, and never instead of the final answer.
 - Explain every result as you go: right after a tool returns, before your next call, write its finding in 1-3
   sentences (the key numbers and what they mean, or why it failed and what you will change). It is shown inside
@@ -126,10 +128,16 @@ class _Helpers:
     planner: Agent[None, pl.PlanDraft]
     explainer: Agent[None, fx.Findings]
     compactor: Agent[None, str]
+    reporter: Agent[None, rp.ConversationReport]
 
 
 #: Helpers by id of the lead agent they were built with.
 _helpers: dict[int, _Helpers] = {}
+
+
+def reporter_of(agent: Agent) -> Agent[None, rp.ConversationReport] | None:
+    helpers = _helpers.get(id(agent))
+    return helpers.reporter if helpers else None
 
 
 def _wrap(spec: ToolSpec, agent_name: str = AGENT_NAME) -> Callable[..., Any]:
@@ -250,7 +258,7 @@ def build_lead_agent(model: Any, *, namespaces: Sequence[str] | None = None, ins
         retries=TOOL_RETRIES,
     )
     _helpers[id(agent)] = _Helpers(pl.build_planner(model, namespaces=namespaces), fx.build_explainer(model),
-                                   ac.build_compactor(model))
+                                   ac.build_compactor(model), rp.build_reporter(model))
     weakref.finalize(agent, _helpers.pop, id(agent), None)
 
     @agent.instructions
@@ -329,7 +337,23 @@ def _result_fields(content: Any) -> dict[str, Any]:
     obj = content.get("result_id") or content.get("name")
     return {"object": obj if isinstance(obj, str) else None,
             "version": content.get("version") if isinstance(content.get("version"), int) else None,
-            "block_id": content.get("block_id") if isinstance(content.get("block_id"), str) else None}
+            "block_id": content.get("block_id") if isinstance(content.get("block_id"), str) else None,
+            "objects": _cell_objects(content) or None}
+
+
+def _cell_objects(content: dict[str, Any]) -> list[dict[str, Any]]:
+    """The objects a Python cell registered through its own calls (py_run reports their journal entries)."""
+    journal = get_context().journal
+    seen: dict[str, int | None] = {}
+    for seq in content.get("calls") or []:
+        try:
+            entry = journal.get(seq)
+        except Exception:  # noqa: BLE001 - an entry that is gone just shows no object
+            continue
+        for a in entry["affected"] if entry["ok"] else []:
+            if a.get("kind") == "object" and a.get("version_after"):
+                seen[a["name"]] = a["version_after"]
+    return [{"name": n, "version": v} for n, v in seen.items()]
 
 
 class ChatSession:
@@ -475,10 +499,26 @@ class ChatSession:
                     for ev in state.say(self._fallback_answer(state)):
                         yield ev
             unexplained = [c for c in state.cells.values() if c.get("ok") and not c.get("finding")]
-            if unexplained and helpers is not None:
+            # A model that never wrote its conclusions in the workspace gets them drawn from its answer.
+            has = {n["section"] for n in state.scratch.notes}
+            answer = ("" if {"conclusion", "issue"} <= has or not state.cells
+                      else state.final_text() or "".join(state.answer).strip())
+            if (unexplained or answer) and helpers is not None:
                 yield {"type": "status", "message": "Explicando los resultados…"}
-                for ev in await self._explain(helpers.explainer, message, unexplained):
+                events, conclusions, issues = await self._explain(helpers.explainer, message, unexplained, answer)
+                for ev in events:
                     yield ev
+                for text in conclusions if "conclusion" not in has else []:
+                    state.scratch.add("conclusion", text)
+                for text in issues if "issue" not in has else []:
+                    state.scratch.add("issue", text)
+            # The objects the turn produced, as a deliverable of the workspace.
+            if not any(n["section"] == "result" for n in state.scratch.notes):
+                names = state.objects()
+                if names:
+                    state.scratch.add("result", "Objetos creados o actualizados: " + ", ".join(names) + ".")
+            if state.scratch:
+                yield {"type": "scratch", **state.scratch.dump()}
         finally:
             self.seen_seq = ctx.journal.last_seq()
             entry = {"role": "assistant", "content": "".join(state.answer), "turn_id": turn.turn_id,
@@ -528,17 +568,17 @@ class ChatSession:
             return pl.Plan(), pl.Scratch(), False, []
 
     @staticmethod
-    async def _explain(explainer: Agent[None, fx.Findings], request: str,
-                       cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    async def _explain(explainer: Agent[None, fx.Findings], request: str, cells: list[dict[str, Any]],
+                       answer: str = "") -> tuple[list[dict[str, Any]], list[str], list[str]]:
         try:
-            found = await fx.explain(explainer, request, cells)
+            found, conclusions, issues = await fx.explain(explainer, request, cells, answer=answer)
         except Exception as exc:  # noqa: BLE001 - the cells and the answer stand without it
             log.warning("Explaining cells failed: %s", exc)
-            return []
+            return [], [], []
         for c in cells:
             if c["id"] in found:
                 c["finding"] = found[c["id"]]
-        return [{"type": "finding", "ids": [cid], "text": text, "strip": 0} for cid, text in found.items()]
+        return [{"type": "finding", "ids": [cid], "text": text, "strip": 0} for cid, text in found.items()], conclusions, issues
 
     async def _round(self, agent: Agent, prompt: str, state: _TurnState, *,
                      final: bool = False) -> AsyncIterator[dict[str, Any]]:
@@ -642,6 +682,17 @@ class _TurnState:
     intro: str = ""  # what the model said before its first call
     stopped: bool = False  # the loop hit its tool budget or ran out of retries
     asked: list[str] = field(default_factory=list)  # questions the turn stops on, until the user answers
+
+    def objects(self) -> list[str]:
+        """Names of the objects the turn's cells produced, once each, in order."""
+        names: dict[str, None] = {}
+        for c in self.cells.values():
+            if not c.get("ok"):
+                continue
+            for name in [c.get("object"), *(o["name"] for o in c.get("objects") or [])]:
+                if name:
+                    names[name] = None
+        return list(names)
 
     def final_text(self) -> str:
         return "".join(self.tail).strip()

@@ -5,22 +5,17 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from ..context import get_context
-from ..objects.views import compute, show
-from ..panel import Block
+from ..objects.views import add_artifact, compute, show
 from ._format import figure_data
 from .registry import Qx, tool
 
 
 def _add_figure(fig: Any, title: str, code: str, result_id: str | None = None,
                 replace_block_id: str | None = None) -> dict[str, Any]:
-    ctx = get_context()
     fig.update_layout(margin={"l": 40, "r": 20, "t": 30, "b": 40})
     data = figure_data(fig)
-    if replace_block_id:
-        block = ctx.panel.update(replace_block_id, title=title, data=data, code=code)
-    else:
-        block = ctx.panel.add(Block(kind="plotly_figure", title=title, data=data, code=code, result_id=result_id))
-    return {"block_id": block.id, "title": title}
+    block = add_artifact("plotly_figure", title, data, code, replace_block_id=replace_block_id)
+    return {"block_id": block.id, "title": title, "object": block.result_id}
 
 
 @tool("viz", requires=("plotly",), qx=Qx("page", "scatter", ("x", "y")))
