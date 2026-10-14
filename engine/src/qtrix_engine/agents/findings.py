@@ -20,10 +20,11 @@ they mean (sign, magnitude, significance, a failed assumption...). Use only what
 numbers. Return one finding per cell id given.
 
 When the prompt also gives the answer written for the turn, return in "conclusions" the 1 to 3 key conclusions
-the analysis settled (one sentence each, with the number behind it); otherwise leave "conclusions" empty. In that case also return in "issues" the econometric caveats the analyst must
-keep in mind (a failed assumption or diagnostic, weak identification or instruments, small or unbalanced samples,
-influential data, a specification that limits the interpretation), one sentence each. Never list tool or syntax
-errors the agent fixed along the way. Leave "issues" empty when there are none; do not invent any.
+the analysis settled (one sentence each, with the number behind it); otherwise leave "conclusions" empty. In that case also return in "issues" the econometric
+caveats the analyst must keep in mind (a failed assumption or diagnostic, weak identification or instruments,
+small or unbalanced samples, influential data, a specification that limits the interpretation), one sentence
+each. Never list tool or syntax errors the agent fixed along the way. Leave "issues" empty when there are none;
+do not invent any.
 """
 
 

@@ -101,8 +101,9 @@ How you work:
 - You have a workspace the user watches while you work (plan, tasks, progress and findings fill it by themselves).
   Add to it with scratch_note only what the cells do not show: an alternative you weigh before choosing, a
   provisional conclusion once a key result settles a question, an "issue" for each caveat the analyst must keep
-  in mind (failed assumption, weak identification, data limits; never tool errors you recovered from), a deliverable at the end. A few notes per turn,
-  one or two sentences each; never your internal deliberation, and never instead of the final answer.
+  in mind (failed assumption, weak identification, data limits; never tool errors you recovered from), a
+  deliverable at the end. A few notes per turn, one or two sentences each; never your internal deliberation, and
+  never instead of the final answer.
 - Explain every result as you go: right after a tool returns, before your next call, write its finding in 1-3
   sentences (the key numbers and what they mean, or why it failed and what you will change). It is shown inside
   that call's cell, so the user can follow the analysis cell by cell.
@@ -578,7 +579,8 @@ class ChatSession:
         for c in cells:
             if c["id"] in found:
                 c["finding"] = found[c["id"]]
-        return [{"type": "finding", "ids": [cid], "text": text, "strip": 0} for cid, text in found.items()], conclusions, issues
+        steps = [{"type": "finding", "ids": [cid], "text": text, "strip": 0} for cid, text in found.items()]
+        return steps, conclusions, issues
 
     async def _round(self, agent: Agent, prompt: str, state: _TurnState, *,
                      final: bool = False) -> AsyncIterator[dict[str, Any]]:
