@@ -13,6 +13,11 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - name: Install engine
         run: uv sync --directory engine --all-extras
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Fetch bundled third-party skill
+        run: node scripts/fetch-eco-skills.mjs
       - name: Lint
         run: uv run --directory engine ruff check src tests
       - name: Tests

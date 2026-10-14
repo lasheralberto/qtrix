@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import sys
 import threading
 import time
 
@@ -12,6 +13,7 @@ import uvicorn
 
 from qtrix_engine.api import create_app
 from qtrix_engine.config import Settings
+from qtrix_engine.contrib.econometrics import LIB_DIR
 from qtrix_engine.dispatch import Call, PolicyDenied, dispatch
 from qtrix_engine.qx.client import Client, EngineError
 
@@ -167,7 +169,9 @@ def test_timeouts_interrupt_without_losing_the_kernel(live):
     assert status["interrupted"] is False and status["alive"]
     # A cell stuck in native code ignores the interrupt (time.sleep on Windows): the kernel is restarted.
     stuck = cell(http, "import time\ntime.sleep(120)", timeout=1)
-    assert stuck["timed_out"] and "restarted" in stuck["error"]["evalue"]
+    assert stuck["timed_out"]
+    if sys.platform == "win32":  # elsewhere time.sleep honours the interrupt and no restart is needed
+        assert "restarted" in stuck["error"]["evalue"]
     assert cell(http, "1 + 1")["ok"] and not cell(http, "x")["ok"]  # alive again, with a fresh namespace
 
 
@@ -208,6 +212,7 @@ propensity_score_visualize_propensity_score_distribution(p["union"], ps)
 """
 
 
+@pytest.mark.skipif(not LIB_DIR.exists(), reason="eco-skills not fetched: run `npm run setup:skills`")
 def test_the_skill_causal_library_runs_in_cells_and_its_results_rebuild(live, tmp_path):
     engine, http = live
     path = tmp_path / "wpanel.csv"
