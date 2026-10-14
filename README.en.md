@@ -9,10 +9,10 @@ tests, charts and notes. **Your data never leaves your machine** unless you choo
 > Spanish is the primary README language: see [README.md](README.md). The app UI is available in English and Spanish.
 
 <p align="center">
-  <a href="docs/media/qtrix-demo.mp4">
-    <img src="docs/media/qtrix-demo.gif" alt="qtrix in 20 seconds: ask a question, the agent builds tables, charts and tests, and the report writes itself" width="760">
+  <a href="docs/media/brag.mp4">
+    <img src="docs/media/brag-preview.gif" alt="qtrix in 27 seconds: ask a question, the agent works in its workspace and builds tables, charts and tests, and the report writes itself" width="760">
   </a>
-  <br><sub>▶ <a href="docs/media/qtrix-demo.mp4">Watch the full video (21 s, with sound)</a>: the conversation, how the agent builds the results, and the final report.</sub>
+  <br><sub>▶ <a href="docs/media/brag.mp4">Watch the full video (27 s, with sound)</a>: the conversation, a zoom into the agent workspace (plan, tasks, tools, findings), the results and the final report.</sub>
 </p>
 
 ## Quick start

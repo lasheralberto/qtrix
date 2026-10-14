@@ -9,10 +9,10 @@ en la nube).
 
 
 <p align="center">
-  <a href="docs/media/qtrix-demo.mp4">
-    <img src="docs/media/qtrix-demo.gif" alt="qtrix en 20 segundos: haces una pregunta, el agente construye tablas, gráficos y contrastes, y el informe se escribe solo" width="760">
+  <a href="docs/media/brag.mp4">
+    <img src="docs/media/brag-preview.gif" alt="qtrix en 27 segundos: haces una pregunta, el agente trabaja en su workspace, construye tablas, gráficos y contrastes, y el informe se escribe solo" width="760">
   </a>
-  <br><sub>▶ <a href="docs/media/qtrix-demo.mp4">Ver el vídeo completo (21 s, con sonido)</a>: la conversación, cómo el agente construye los resultados y el informe final.</sub>
+  <br><sub>▶ <a href="docs/media/brag.mp4">Ver el vídeo completo (27 s, con sonido)</a>: la conversación, el workspace del agente con zoom a todo su proceso (plan, tareas, herramientas, hallazgos), los resultados y el informe final.</sub>
 </p>
 
 ---
