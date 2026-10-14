@@ -170,9 +170,10 @@ def test_timeouts_interrupt_without_losing_the_kernel(live):
     # A cell stuck in native code ignores the interrupt (time.sleep on Windows): the kernel is restarted.
     stuck = cell(http, "import time\ntime.sleep(120)", timeout=1)
     assert stuck["timed_out"]
-    if sys.platform == "win32":  # elsewhere time.sleep honours the interrupt and no restart is needed
+    assert cell(http, "1 + 1")["ok"]  # alive again
+    if sys.platform == "win32":  # elsewhere time.sleep honours the interrupt: no restart, the namespace survives
         assert "restarted" in stuck["error"]["evalue"]
-    assert cell(http, "1 + 1")["ok"] and not cell(http, "x")["ok"]  # alive again, with a fresh namespace
+        assert not cell(http, "x")["ok"]  # fresh namespace
 
 
 def test_a_python_cell_written_in_the_panel_shows_its_outputs(live):
