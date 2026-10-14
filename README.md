@@ -7,6 +7,14 @@ ejecuta estimadores reales (statsmodels, linearmodels, arch…) y construye un p
 regresión, contrastes, gráficos y notas. **Tus datos nunca salen de tu máquina** (a menos que elijas un modelo
 en la nube).
 
+
+<p align="center">
+  <a href="docs/media/qtrix-demo.mp4">
+    <img src="docs/media/qtrix-demo.gif" alt="qtrix en 20 segundos: haces una pregunta, el agente construye tablas, gráficos y contrastes, y el informe se escribe solo" width="760">
+  </a>
+  <br><sub>▶ <a href="docs/media/qtrix-demo.mp4">Ver el vídeo completo (21 s, con sonido)</a>: la conversación, cómo el agente construye los resultados y el informe final.</sub>
+</p>
+
 ---
 
 ## Instalación en 3 pasos

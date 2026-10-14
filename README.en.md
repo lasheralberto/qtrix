@@ -8,6 +8,13 @@ tests, charts and notes. **Your data never leaves your machine** unless you choo
 
 > Spanish is the primary README language: see [README.md](README.md). The app UI is available in English and Spanish.
 
+<p align="center">
+  <a href="docs/media/qtrix-demo.mp4">
+    <img src="docs/media/qtrix-demo.gif" alt="qtrix in 20 seconds: ask a question, the agent builds tables, charts and tests, and the report writes itself" width="760">
+  </a>
+  <br><sub>▶ <a href="docs/media/qtrix-demo.mp4">Watch the full video (21 s, with sound)</a>: the conversation, how the agent builds the results, and the final report.</sub>
+</p>
+
 ## Quick start
 
 Requirements: **Node.js 20+**, **[uv](https://docs.astral.sh/uv/getting-started/installation/)** (it installs Python 3.12 for you) and **Git**.
