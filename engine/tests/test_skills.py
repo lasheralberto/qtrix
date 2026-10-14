@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import pytest
 from pydantic_ai.messages import ModelRequest, RetryPromptPart, ToolReturnPart
 
 from qtrix_engine.agents import skills as sk
+from qtrix_engine.contrib.econometrics import LIB_DIR
 
 from .test_planner import FIT, client, events, scripted, text
 
@@ -24,6 +26,7 @@ def test_capabilities_only_for_a_library_with_skills(tmp_path):
     assert sk.skill_capabilities(tmp_path) == []
 
 
+@pytest.mark.skipif(not LIB_DIR.exists(), reason="eco-skills not fetched: run `npm run setup:skills`")
 def test_the_agent_loads_the_guide_and_reads_its_references_without_cells(tmp_path, wages_csv):
     model = scripted([], [
         ("load_capability", {"id": "qtrix-econometrics"}),

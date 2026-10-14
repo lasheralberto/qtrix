@@ -2,9 +2,12 @@
   "name": "qtrix",
   "version": "0.1.0",
   "private": true,
+  "license": "BUSL-1.1",
+  "repository": "github:lasheralberto/qtrix",
   "description": "Atajos de instalación y arranque (el código vive en engine/ y apps/desktop/)",
   "scripts": {
-    "setup": "uv sync --directory engine --all-extras && npm --prefix apps/desktop install",
+    "setup": "uv sync --directory engine --all-extras && npm run setup:skills && npm --prefix apps/desktop install",
+    "setup:skills": "node scripts/fetch-eco-skills.mjs",
     "start": "npm --prefix apps/desktop run dev",
     "test": "uv run --directory engine pytest"
   }
