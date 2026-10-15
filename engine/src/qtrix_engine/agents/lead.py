@@ -6,6 +6,7 @@ import functools
 import inspect
 import json
 import logging
+import re
 import uuid
 import weakref
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -104,6 +105,11 @@ How you work:
   in mind (failed assumption, weak identification, data limits; never tool errors you recovered from), a
   deliverable at the end. A few notes per turn, one or two sentences each; never your internal deliberation, and
   never instead of the final answer.
+- The workspace also has "Next steps": what is still open in the whole conversation, shared with the user, who can
+  add, tick and delete them. Before your final answer, leave with next_step the 1 to 3 follow-ups the analysis
+  leaves open (a robustness check not run, a specification to compare...; refer to objects as [[name]], they become
+  links the user can open), and close with next_step_done the ones this turn settled. When the prompt lists next
+  steps, pick them up if the user asks to continue or refers to one ("do step 2").
 - Explain every result as you go: right after a tool returns, before your next call, write its finding in 1-3
   sentences (the key numbers and what they mean, or why it failed and what you will change). It is shown inside
   that call's cell, so the user can follow the analysis cell by cell.
@@ -221,6 +227,12 @@ def workspace_context() -> str:
             names = ", ".join(f"{o.name} ({o.type} v{o.version})" for o in objects[:40])
             more = f", … {len(objects) - 40} more (obj_list)" if len(objects) > 40 else ""
             lines.append(f"\n## Objects in the workfile (shared by every conversation of the notebook)\n{names}{more}")
+    steps = getattr(ctx.chat, "next_steps", None)  # a context may have no chat yet
+    if steps:
+        lines.append("\n## Next steps of this conversation (the user sees this list; [[name]] is a workfile object)\n"
+                     + steps.render()
+                     + "\nPick them up when the user asks to continue or refers to one (\"do step 2\"). Close one "
+                       "with next_step_done when you settle it; leave a follow-up with next_step.")
     lines.append("\n## Analysis panel of this conversation (in order)")
     blocks = ctx.panel.blocks()
     if not blocks:
@@ -371,18 +383,46 @@ class ChatSession:
         self.transcript: list[dict[str, Any]] = []
         self.seen_seq: int | None = None  # journal position at the end of the agent's last turn
         self.overhead = 0  # tokens of instructions and tool schemas, measured before the last compaction
+        #: What is left to do in this conversation: written by the agent and the user, read by the agent every turn.
+        self.next_steps = pl.NextSteps()
         #: Called (without arguments) when a turn ends or the chat is reset; the notebook's autosave hangs here.
         self.on_change: Callable[[], None] | None = None
 
-    def restore(self, history: list[ModelMessage], transcript: list[dict[str, Any]], seen_seq: int | None) -> None:
+    def restore(self, history: list[ModelMessage], transcript: list[dict[str, Any]], seen_seq: int | None,
+                next_steps: list[dict[str, Any]] | None = None) -> None:
         self.history, self.transcript, self.seen_seq = history, transcript, seen_seq
+        self.next_steps.load(next_steps)
 
     def reset(self) -> None:
         self.history.clear()
         self.transcript.clear()
+        self.next_steps.load(None)
         self.seen_seq = None
         if self.on_change is not None:
             self.on_change()
+
+    def edit_next_steps(self, *, add: str | None = None, ref: str | None = None, done: bool | None = None,
+                        text: str | None = None, remove: bool = False) -> list[dict[str, Any]]:
+        """The user's changes to the next steps: add one, tick or untick one, rewrite one, delete one."""
+        steps = self.next_steps
+        if add is not None:
+            if not add.strip():
+                raise ValueError("The step is empty.")
+            steps.add(add, author="user")
+        elif ref is not None:
+            item = steps.get(ref)
+            if item is None:
+                raise KeyError(ref)
+            if remove:
+                steps.remove(ref)
+            else:
+                if done is not None:
+                    item["done"] = done
+                if text is not None and text.strip():
+                    item["text"] = " ".join(text.split())
+        if self.on_change is not None:
+            self.on_change()
+        return steps.dump()
 
     def context(self, window: int) -> dict[str, Any]:
         """How much of the model's context window the conversation fills (the meter next to the model picker)."""
@@ -487,7 +527,7 @@ class ChatSession:
                     yield {"type": "scratch", **state.scratch.dump()}
             prompt = pl.executor_prompt(request, state.plan)
             with (pl.active_plan(state.plan if state.plan.steps else None), pl.active_scratch(state.scratch),
-                  pl.asking(state.asked)):
+                  pl.active_next(self.next_steps), pl.asking(state.asked)):
                 if talk_only and not state.asked:
                     with pl.finalizing():
                         async for ev in self._round(agent, prompt, state, final=True):
@@ -520,19 +560,24 @@ class ChatSession:
                     for ev in state.say(self._fallback_answer(state)):
                         yield ev
             unexplained = [c for c in state.cells.values() if c.get("ok") and not c.get("finding")]
-            # A model that never wrote its conclusions in the workspace gets them drawn from its answer.
+            # A model that never wrote its conclusions, caveats or follow-ups in the workspace gets them drawn from
+            # its answer (small models seldom call the bookkeeping tools on their own).
             has = {n["section"] for n in state.scratch.notes}
-            answer = ("" if {"conclusion", "issue"} <= has or not state.cells
-                      else state.final_text() or "".join(state.answer).strip())
+            summarise = bool(state.cells) and not ({"conclusion", "issue"} <= has and state.noted_next)
+            answer = (state.final_text() or "".join(state.answer).strip()) if summarise else ""
             if (unexplained or answer) and helpers is not None:
                 yield {"type": "status", "message": "Explicando los resultados…"}
-                events, conclusions, issues = await self._explain(helpers.explainer, message, unexplained, answer)
+                events, conclusions, issues, follow_ups = await self._explain(
+                    helpers.explainer, message, unexplained, answer,
+                    objects=state.objects(), open_steps=[i["text"] for i in self.next_steps.open()])
                 for ev in events:
                     yield ev
                 for text in conclusions if "conclusion" not in has else []:
                     state.scratch.add("conclusion", text)
                 for text in issues if "issue" not in has else []:
                     state.scratch.add("issue", text)
+                if not state.noted_next and self._add_follow_ups(follow_ups):
+                    yield {"type": "next_steps", "items": self.next_steps.dump()}
             # The objects the turn produced, as a deliverable of the workspace.
             if not any(n["section"] == "result" for n in state.scratch.notes):
                 names = state.objects()
@@ -588,19 +633,34 @@ class ChatSession:
             log.warning("Planner failed, running without a plan: %s", exc)
             return pl.Plan(), pl.Scratch(), False, []
 
+    def _add_follow_ups(self, texts: list[str]) -> bool:
+        """The explainer's follow-ups as next steps: a reference to an object that does not exist loses its brackets,
+        and a step already open is not added twice. Whether any was added."""
+        added = False
+        for text in texts:
+            for name in pl.unknown_objects(text):
+                text = re.sub(r"\[\[\s*" + re.escape(name) + r"\s*\]\]", name, text, flags=re.I)
+            text = " ".join(text.split())
+            if text and not any(i["text"] == text for i in self.next_steps.open()):
+                self.next_steps.add(text)
+                added = True
+        return added
+
     @staticmethod
     async def _explain(explainer: Agent[None, fx.Findings], request: str, cells: list[dict[str, Any]],
-                       answer: str = "") -> tuple[list[dict[str, Any]], list[str], list[str]]:
+                       answer: str = "", *, objects: Sequence[str] = (), open_steps: Sequence[str] = (),
+                       ) -> tuple[list[dict[str, Any]], list[str], list[str], list[str]]:
         try:
-            found, conclusions, issues = await fx.explain(explainer, request, cells, answer=answer)
+            found, conclusions, issues, follow_ups = await fx.explain(explainer, request, cells, answer=answer,
+                                                                      objects=objects, open_steps=open_steps)
         except Exception as exc:  # noqa: BLE001 - the cells and the answer stand without it
             log.warning("Explaining cells failed: %s", exc)
-            return [], [], []
+            return [], [], [], []
         for c in cells:
             if c["id"] in found:
                 c["finding"] = found[c["id"]]
         steps = [{"type": "finding", "ids": [cid], "text": text, "strip": 0} for cid, text in found.items()]
-        return steps, conclusions, issues
+        return steps, conclusions, issues, follow_ups
 
     async def _round(self, agent: Agent, prompt: str, state: _TurnState, *,
                      final: bool = False) -> AsyncIterator[dict[str, Any]]:
@@ -642,6 +702,10 @@ class ChatSession:
                                 continue
                             if event.part.tool_name in pl.SCRATCH_TOOLS:
                                 yield {"type": "scratch", **state.scratch.dump()}
+                                continue
+                            if event.part.tool_name in pl.NEXT_TOOLS:
+                                state.noted_next = True
+                                yield {"type": "next_steps", "items": self.next_steps.dump()}
                                 continue
                             if event.part.tool_name in pl.ASK_TOOLS:
                                 continue
@@ -723,6 +787,7 @@ class _TurnState:
     intro: str = ""  # what the model said before its first call
     stopped: bool = False  # the loop hit its tool budget or ran out of retries
     asked: list[str] = field(default_factory=list)  # questions the turn stops on, until the user answers
+    noted_next: bool = False  # the agent wrote or closed a next step itself
 
     def objects(self) -> list[str]:
         """Names of the objects the turn's cells produced, once each, in order."""

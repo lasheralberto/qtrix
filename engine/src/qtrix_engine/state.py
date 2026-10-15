@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS _qtrix_chat (
     seen_seq   BIGINT,
     updated_at TIMESTAMP DEFAULT now()
 )"""
+#: Notebooks saved before the next steps have no such column.
+CHAT_NEXT_STEPS_DDL = "ALTER TABLE _qtrix_chat ADD COLUMN IF NOT EXISTS next_steps VARCHAR"
 
 #: Before threads: the single report of the notebook (read once, to adopt it as the first thread's panel).
 LEGACY_PANEL_DDL = """
@@ -97,7 +99,7 @@ class StateStore:
     def __init__(self, workspace: Workspace) -> None:
         self._ws = workspace
         with workspace._lock:
-            for ddl in (CHAT_DDL, LEGACY_PANEL_DDL, PANELS_DDL, THREADS_DDL, REPORTING_DDL):
+            for ddl in (CHAT_DDL, CHAT_NEXT_STEPS_DDL, LEGACY_PANEL_DDL, PANELS_DDL, THREADS_DDL, REPORTING_DDL):
                 workspace._con.execute(ddl)
 
     # ---- threads --------------------------------------------------------------------------------------------
@@ -142,16 +144,19 @@ class StateStore:
         history = ModelMessagesTypeAdapter.dump_json(chat.history, fallback=str).decode()
         with self._ws._lock:
             self._ws._con.execute(
-                "INSERT OR REPLACE INTO _qtrix_chat (thread_id, history, transcript, seen_seq) VALUES (?, ?, ?, ?)",
-                [thread_id, history, _dumps(chat.transcript), chat.seen_seq])
+                "INSERT OR REPLACE INTO _qtrix_chat (thread_id, history, transcript, seen_seq, next_steps) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [thread_id, history, _dumps(chat.transcript), chat.seen_seq, _dumps(chat.next_steps.items)])
 
     def load_chat(self, chat: ChatSession, thread_id: str = MAIN) -> bool:
         with self._ws._lock:
             row = self._ws._con.execute(
-                "SELECT history, transcript, seen_seq FROM _qtrix_chat WHERE thread_id = ?", [thread_id]).fetchone()
+                "SELECT history, transcript, seen_seq, next_steps FROM _qtrix_chat WHERE thread_id = ?",
+                [thread_id]).fetchone()
         if row is None:
             return False
-        chat.restore(ModelMessagesTypeAdapter.validate_json(row[0]), json.loads(row[1]), row[2])
+        chat.restore(ModelMessagesTypeAdapter.validate_json(row[0]), json.loads(row[1]), row[2],
+                     json.loads(row[3]) if row[3] else None)
         return True
 
     def save_panel(self, panel: PanelState, thread_id: str = MAIN) -> None:

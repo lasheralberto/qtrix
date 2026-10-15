@@ -14,16 +14,17 @@ import {
   FlaskConical,
   Lightbulb,
   ListChecks,
+  ListTodo,
   LoaderCircle,
   Package,
   Route,
   Search,
   X,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type { CellInfo, PlanStep } from "./api";
 import { Markdown } from "./blocks";
-import type { Turn } from "./chat";
+import type { NextStepsApi, Turn } from "./chat";
 import { T } from "./i18n";
 import { PlanPanel, type PlanDraft } from "./plan";
 
@@ -63,6 +64,8 @@ function Section(props: {
   count?: number;
   empty: string;
   children?: ReactNode;
+  /** Shown whenever the section is open, even while it is empty. */
+  footer?: ReactNode;
 }) {
   const has = Boolean(props.count);
   const [open, setOpen] = useState(true);
@@ -74,8 +77,86 @@ function Section(props: {
         {has && <span className="ws-count">{props.count}</span>}
         <ChevronRight size={13} className={`ws-caret ${open ? "rot" : ""}`} />
       </button>
-      {open && <div className="ws-section-body">{has ? props.children : <p className="ws-empty">{props.empty}</p>}</div>}
+      {open && (
+        <div className="ws-section-body">
+          {has ? props.children : <p className="ws-empty">{props.empty}</p>}
+          {props.footer}
+        </div>
+      )}
     </section>
+  );
+}
+
+const OBJECT_REF = /\[\[\s*([A-Za-z][A-Za-z0-9_]{0,31})\s*\]\]/g;
+
+/** A step's text with its ``[[object]]`` references as buttons that open the object in the panel. */
+function StepText({ text, onOpenObject }: { text: string; onOpenObject(name: string): void }) {
+  const parts = text.split(OBJECT_REF); // odd positions are the captured names
+  return (
+    <span>
+      {parts.map((p, i) =>
+        i % 2 ? (
+          <button key={i} className="ws-object ws-ref" onClick={() => onOpenObject(p.toLowerCase())} title={T("workspace.openInPanel")}>
+            <Package size={11} />
+            {p}
+          </button>
+        ) : (
+          <Fragment key={i}>{p}</Fragment>
+        ),
+      )}
+    </span>
+  );
+}
+
+/** What is left to do in the whole conversation: the agent leaves follow-ups, the user ticks, deletes and adds. */
+function NextSteps({ steps, onOpenObject }: { steps: NextStepsApi; onOpenObject(name: string): void }) {
+  const [draft, setDraft] = useState("");
+  const open = steps.items.filter((s) => !s.done).length;
+  const add = (e: FormEvent) => {
+    e.preventDefault();
+    const text = draft.trim();
+    if (!text) return;
+    setDraft("");
+    steps.add(text).catch(() => setDraft(text));
+  };
+  return (
+    <Section
+      id="next"
+      icon={<ListTodo size={14} />}
+      title={T("workspace.nextSteps")}
+      count={open}
+      empty={T("workspace.noNextSteps")}
+      footer={
+        <form className="ws-next-add" onSubmit={add}>
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={T("workspace.addNextStep")}
+            aria-label={T("workspace.addNextStep")}
+          />
+        </form>
+      }
+    >
+      <ul className="ws-tasks ws-next">
+        {steps.items.map((s) => (
+          <li key={s.id} className={`ws-task ${s.done ? "done" : ""} ${s.author}`}>
+            <button
+              className="ws-next-check"
+              role="checkbox"
+              aria-checked={s.done}
+              title={s.done ? T("workspace.reopenStep") : T("workspace.doneStep")}
+              onClick={() => steps.toggle(s.id, !s.done)}
+            >
+              {s.done ? <CircleCheck size={13} /> : <Circle size={13} />}
+            </button>
+            <StepText text={s.text} onOpenObject={onOpenObject} />
+            <button className="ws-next-del ghost" title={T("workspace.deleteStep")} onClick={() => steps.remove(s.id)}>
+              <X size={12} />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </Section>
   );
 }
 
@@ -101,6 +182,8 @@ export function Workspace(props: {
   onSelect(key: string | null): void;
   onClose(): void;
   onOpenObject(name: string, blockId?: string | null): void;
+  /** The conversation's next steps: they stay while the user moves between turns. */
+  steps?: NextStepsApi;
   /** Plan mode: the plan waiting for the user's decision; it gets a space of its own beside the agent's work. */
   plan?: {
     draft: PlanDraft;
@@ -196,10 +279,11 @@ export function Workspace(props: {
             onReject={plan.onReject}
             onRetry={plan.onRetry}
           />
-        ) : turn ? (
-          <TurnWork key={turn.key} turn={turn} onOpenObject={props.onOpenObject} />
         ) : (
-          <EmptyWorkspace />
+          <>
+            {props.steps && <NextSteps steps={props.steps} onOpenObject={props.onOpenObject} />}
+            {turn ? <TurnWork key={turn.key} turn={turn} onOpenObject={props.onOpenObject} /> : <EmptyWorkspace />}
+          </>
         )}
       </div>
     </aside>

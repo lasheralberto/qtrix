@@ -25,6 +25,11 @@ In that case also return in "issues" the econometric caveats the analyst must ke
 or diagnostic, weak identification or instruments, small or unbalanced samples, influential data, a
 specification that limits the interpretation), one sentence each. Never list tool or syntax errors the agent
 fixed along the way. Leave "issues" empty when there are none; do not invent any.
+Also return in "next_steps" 1 to 3 concrete follow-ups the analysis leaves open for a later turn (a robustness
+check or test not run, an alternative specification or estimator worth comparing, data that would strengthen the
+identification), one sentence each, as an action. Refer to the objects of the turn as [[name]], using only the
+names listed. Do not repeat a step already open, nor what the turn already did; leave it empty when nothing real
+is left.
 """
 
 
@@ -37,6 +42,7 @@ class Findings(BaseModel):
     findings: list[CellFinding] = Field(default_factory=list)
     conclusions: list[str] = Field(default_factory=list)
     issues: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
 
 
 def build_explainer(model: Any) -> Agent[None, Findings]:
@@ -44,10 +50,13 @@ def build_explainer(model: Any) -> Agent[None, Findings]:
 
 
 def explainer_prompt(request: str, cells: Sequence[dict[str, Any]], *, limit: int = 1200,
-                     answer: str = "") -> str:
+                     answer: str = "", objects: Sequence[str] = (), open_steps: Sequence[str] = ()) -> str:
     parts = [f"User request: {request}", ""]
     if answer:
         parts += ["Answer written for the turn (give its key conclusions):", answer[:3000], ""]
+        parts += ["Objects of the turn (refer to them as [[name]]): " + (", ".join(objects) or "(none)"), ""]
+        if open_steps:
+            parts += ["Next steps already open (do not repeat them):", *(f"- {s}" for s in open_steps), ""]
     for c in cells:
         content = str(c.get("content") or "")
         parts += [f"### Cell {c['id']}", c.get("code") or c["name"],
@@ -56,15 +65,18 @@ def explainer_prompt(request: str, cells: Sequence[dict[str, Any]], *, limit: in
 
 
 async def explain(explainer: Agent[None, Findings], request: str, cells: Sequence[dict[str, Any]], *,
-                  answer: str = "") -> tuple[dict[str, str], list[str], list[str]]:
-    """Findings by cell id for ``cells`` and, given the turn's ``answer``, its key conclusions and the econometric
-    issues to keep in mind (empty when the model cannot produce them)."""
+                  answer: str = "", objects: Sequence[str] = (), open_steps: Sequence[str] = (),
+                  ) -> tuple[dict[str, str], list[str], list[str], list[str]]:
+    """Findings by cell id for ``cells`` and, given the turn's ``answer``, its key conclusions, the econometric
+    issues to keep in mind and the follow-ups it leaves open (empty when the model cannot produce them)."""
     if not cells and not answer:
-        return {}, [], []
-    result = await explainer.run(explainer_prompt(request, cells, answer=answer),
+        return {}, [], [], []
+    result = await explainer.run(explainer_prompt(request, cells, answer=answer, objects=objects,
+                                                  open_steps=open_steps),
                                  usage_limits=UsageLimits(request_limit=3))
     wanted = {c["id"] for c in cells}
     found = {f.id: f.finding.strip() for f in result.output.findings if f.id in wanted and f.finding.strip()}
     conclusions = [c.strip() for c in result.output.conclusions if c.strip()] if answer else []
     issues = [i.strip() for i in result.output.issues if i.strip()] if answer else []
-    return found, conclusions[:3], issues[:5]
+    follow_ups = [s.strip() for s in result.output.next_steps if s.strip()] if answer else []
+    return found, conclusions[:3], issues[:5], follow_ups[:3]

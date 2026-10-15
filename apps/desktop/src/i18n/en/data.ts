@@ -131,4 +131,10 @@ export const data = {
   "workspace.noResultsYet": "No results yet.",
   "workspace.noObjects": "This turn did not produce any objects.",
   "workspace.openInPanel": "Open in panel",
+  "workspace.nextSteps": "Next steps",
+  "workspace.noNextSteps": "Nothing pending. The agent leaves follow-ups here, and you can add your own.",
+  "workspace.addNextStep": "Add a next step… (refer to an object as [[name]])",
+  "workspace.doneStep": "Mark as done",
+  "workspace.reopenStep": "Mark as pending",
+  "workspace.deleteStep": "Delete",
 } as const satisfies Record<string, string>;

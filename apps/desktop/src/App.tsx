@@ -95,7 +95,7 @@ export default function App() {
   const lastBlock = useCallback(() => blocksRef.current[blocksRef.current.length - 1]?.id ?? null, []);
   const conversation = activeId && threadId ? `${activeId}/${threadId}` : null;
   const reportingEvent = useRef<(ev: Parameters<ReturnType<typeof useReporting>["handleEvent"]>[0]) => void>(() => {});
-  const { turns, busy, send, stop, reset, context, compacting, compact, refreshContext } = useChat(
+  const { turns, busy, send, stop, reset, context, compacting, compact, refreshContext, steps } = useChat(
     lastBlock,
     conversation,
     (ev) => reportingEvent.current(ev),
@@ -592,6 +592,7 @@ export default function App() {
         onSelect={setWsTurn}
         onClose={closeWorkspace}
         onOpenObject={openObject}
+        steps={steps}
         plan={
           plans.plan && {
             draft: plans.plan,

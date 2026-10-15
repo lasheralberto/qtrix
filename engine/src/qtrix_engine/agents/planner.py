@@ -152,8 +152,75 @@ class Scratch:
         return bool(self.goal or self.notes)
 
 
+#: A reference to a workfile object inside a next step's text: ``[[eq_salary]]``.
+OBJECT_REF = re.compile(r"\[\[\s*([A-Za-z][A-Za-z0-9_]{0,31})\s*\]\]")
+
+
+def object_refs(text: str) -> list[str]:
+    """Names of the objects a text refers to with ``[[name]]``, once each, lowercased, in order."""
+    return list(dict.fromkeys(m.lower() for m in OBJECT_REF.findall(text)))
+
+
+@dataclass
+class NextSteps:
+    """What is left to do in the conversation (not in one turn): the agent and the user both write it, it survives
+    the turns, and the agent reads it at the start of each one. A step may refer to workfile objects as ``[[name]]``."""
+
+    items: list[dict[str, Any]] = field(default_factory=list)
+
+    def load(self, items: Sequence[dict[str, Any]] | None) -> None:
+        self.items = [dict(i) for i in items or []]
+
+    def _new_id(self) -> str:
+        n = 1 + max((int(i["id"][1:]) for i in self.items if i["id"][1:].isdigit()), default=0)
+        return f"n{n}"
+
+    def add(self, text: str, author: str = "agent") -> dict[str, Any]:
+        item = {"id": self._new_id(), "text": " ".join(text.split()), "done": False, "author": author}
+        self.items.append(item)
+        return item
+
+    def get(self, ref: str | int) -> dict[str, Any] | None:
+        """A step by id (``n3``) or by its 1-based position among all steps."""
+        if isinstance(ref, int) or str(ref).isdigit():
+            pos = int(ref)
+            return self.items[pos - 1] if 1 <= pos <= len(self.items) else None
+        return next((i for i in self.items if i["id"] == ref), None)
+
+    def remove(self, ref: str) -> bool:
+        item = self.get(ref)
+        if item is None:
+            return False
+        self.items.remove(item)
+        return True
+
+    def open(self) -> list[dict[str, Any]]:
+        return [i for i in self.items if not i["done"]]
+
+    def dump(self) -> list[dict[str, Any]]:
+        return [{**i, "objects": object_refs(i["text"])} for i in self.items]
+
+    def render(self) -> str:
+        """The list for the agent's prompt: numbered, with the done ones marked."""
+        return "\n".join(f"{n}. [{'x' if i['done'] else ' '}] {i['text']}"
+                         + (" (added by the user)" if i.get("author") == "user" else "")
+                         for n, i in enumerate(self.items, 1))
+
+    def __bool__(self) -> bool:
+        return bool(self.items)
+
+
+def unknown_objects(text: str) -> list[str]:
+    """The objects ``text`` refers to that are not in the workfile."""
+    from ..context import get_context  # imported late: the context imports the agents' tools
+
+    store = get_context().objects
+    return [n for n in object_refs(text) if not store.exists(n)]
+
+
 _plan: ContextVar[Plan | None] = ContextVar("qtrix_plan", default=None)
 _scratch: ContextVar[Scratch | None] = ContextVar("qtrix_scratch", default=None)
+_next: ContextVar[NextSteps | None] = ContextVar("qtrix_next_steps", default=None)
 _finalizing: ContextVar[bool] = ContextVar("qtrix_finalizing", default=False)
 #: Questions the executor has put to the user in this turn (a mutable holder: tools run in a copied context).
 _asked: ContextVar[list[str] | None] = ContextVar("qtrix_asked", default=None)
@@ -161,8 +228,9 @@ _asked: ContextVar[list[str] | None] = ContextVar("qtrix_asked", default=None)
 PLAN_TOOLS = frozenset({"plan_update", "plan_revise"})
 SCRATCH_TOOLS = frozenset({"scratch_note"})
 ASK_TOOLS = frozenset({"ask_user"})
+NEXT_TOOLS = frozenset({"next_step", "next_step_done"})
 #: Bookkeeping tools of the agent: never shown as Python cells.
-WORK_TOOLS = PLAN_TOOLS | SCRATCH_TOOLS | ASK_TOOLS
+WORK_TOOLS = PLAN_TOOLS | SCRATCH_TOOLS | ASK_TOOLS | NEXT_TOOLS
 NOTE_LIMIT = 400  # characters of one workspace note
 
 
@@ -182,6 +250,15 @@ def active_scratch(scratch: Scratch | None) -> Iterator[None]:
         yield
     finally:
         _scratch.reset(token)
+
+
+@contextmanager
+def active_next(steps: NextSteps | None) -> Iterator[None]:
+    token = _next.set(steps)
+    try:
+        yield
+    finally:
+        _next.reset(token)
 
 
 @contextmanager
@@ -295,8 +372,56 @@ def scratch_note(section: NoteSection, text: str) -> str:
     return "Noted."
 
 
+def next_step(text: str) -> str:
+    """Leave a step for later in the conversation's "Next steps": work that is still open and that you or the user
+    should pick up in a later turn (a robustness check you did not run, a model to compare, a question to settle).
+
+    Refer to workfile objects as [[name]], e.g. "Compare [[eq_salary_ext]] with a fixed-effects model": the user can
+    open them from the list and you will see the list again at the start of every turn. One to three per turn,
+    before the final answer: real follow-ups, not the steps of the current plan.
+
+    Args:
+        text: The step, one or two sentences, in the user's language. Objects as [[name]].
+    """
+    check_tools_allowed()
+    steps = _next.get()
+    text = " ".join(text.split())
+    if steps is None:
+        raise ModelRetry("There is no next-steps list in this turn.")
+    if not text:
+        raise ModelRetry("The step is empty.")
+    if len(text) > NOTE_LIMIT:
+        raise ModelRetry(f"Too long ({len(text)} characters): summarise it in at most {NOTE_LIMIT}.")
+    if (missing := unknown_objects(text)):
+        raise ModelRetry("These objects do not exist: " + ", ".join(f"[[{n}]]" for n in missing)
+                         + ". Refer only to objects of the workfile (obj_list), or drop the brackets.")
+    if any(i["text"] == text and not i["done"] for i in steps.items):
+        return "Already in the list."
+    steps.add(text)
+    return "Added.\n" + steps.render()
+
+
+def next_step_done(step: int) -> str:
+    """Mark a step of the "Next steps" list as done when this turn settled it.
+
+    Args:
+        step: Number of the step in the list (1-based).
+    """
+    check_tools_allowed()
+    steps = _next.get()
+    item = steps.get(step) if steps is not None else None
+    if item is None:
+        raise ModelRetry(f"There is no next step {step}. Current list:\n{steps.render() if steps else '(empty)'}")
+    item["done"] = True
+    return steps.render()
+
+
 async def _when_scratching(ctx: RunContext[None], tool_def: ToolDefinition) -> ToolDefinition | None:
     return tool_def if _scratch.get() is not None else None
+
+
+async def _when_next_steps(ctx: RunContext[None], tool_def: ToolDefinition) -> ToolDefinition | None:
+    return tool_def if _next.get() is not None else None
 
 
 async def _when_asking(ctx: RunContext[None], tool_def: ToolDefinition) -> ToolDefinition | None:
@@ -312,6 +437,8 @@ def plan_toolset() -> FunctionToolset:
              for fn in (plan_update, plan_revise)]
     tools.append(Tool(scratch_note, takes_ctx=False, docstring_format="google", prepare=_when_scratching))
     tools.append(Tool(ask_user, takes_ctx=False, docstring_format="google", prepare=_when_asking))
+    tools += [Tool(fn, takes_ctx=False, docstring_format="google", prepare=_when_next_steps)
+              for fn in (next_step, next_step_done)]
     return FunctionToolset(tools, max_retries=3)
 
 

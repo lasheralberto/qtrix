@@ -163,8 +163,19 @@ export interface Scratch {
   notes: ScratchNote[];
 }
 
+/** What is left to do in the conversation, shared by the user and the agent. ``objects`` are the ``[[name]]``
+ * references in the text. */
+export interface NextStep {
+  id: string;
+  text: string;
+  done: boolean;
+  author: "agent" | "user";
+  objects: string[];
+}
+
 export type ChatEvent =
   | { type: "turn"; turn_id: string; after_block?: string | null }
+  | { type: "next_steps"; items: NextStep[] }
   | { type: "plan"; steps: PlanStep[] }
   | ({ type: "scratch" } & Scratch)
   /** Text the agent wrote after some results: it explains those cells (no ids = the turn's intro). The last
@@ -438,6 +449,11 @@ export const api = {
   testModel: (p: ModelProfile) => request<{ ok: boolean; reply?: string; error?: string }>("/models/test", json(p)),
   history: () => request<ChatTurn[]>("/chat/history"),
   resetChat: () => request("/chat/reset", { method: "POST" }),
+  nextSteps: () => request<NextStep[]>("/chat/next-steps"),
+  addNextStep: (text: string) => request<NextStep[]>("/chat/next-steps", json({ text })),
+  editNextStep: (id: string, patch: { text?: string; done?: boolean }) =>
+    request<NextStep[]>(`/chat/next-steps/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  removeNextStep: (id: string) => request<NextStep[]>(`/chat/next-steps/${id}`, { method: "DELETE" }),
   reporting: () => request<ReportingState>("/reporting"),
   objectView: (name: string, view?: string | null) =>
     request<{ kind: BlockKind; title: string; data: Record<string, any> }>(

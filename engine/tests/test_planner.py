@@ -40,7 +40,8 @@ def scripted(steps: list[str], script: list, *, final: str | None = "Resumen fin
             concl = ["Conclusión del turno"] if "Answer written for the turn" in last_prompt(messages) else []
             return ModelResponse(parts=[ToolCallPart(out.name, {"findings": [
                 {"id": i, "finding": f"Hallazgo de {i}"} for i in ids], "conclusions": concl,
-                "issues": ["Heterocedasticidad probable"] if concl else []})])
+                "issues": ["Heterocedasticidad probable"] if concl else [],
+                "next_steps": ["Estimar [[eq_educ]] por IV.", "Revisar [[eq_fantasma]]."] if concl else []})])
         return ModelResponse(parts=[ToolCallPart(out.name, {"steps": steps, **(draft or {})})])
 
     async def run(messages, info: AgentInfo):
@@ -208,6 +209,74 @@ def test_the_workspace_collects_goal_alternatives_and_the_agents_notes(tmp_path,
     turn = c.get("/chat/history").json()[-1]
     assert turn["scratch"]["goal"] == "Medir el retorno de la educación"
     assert turn["scratch"]["notes"][-1] == {"section": "result", "text": "eq_educ estimado."}
+
+
+def test_next_steps_are_written_by_the_agent_edited_by_the_user_and_kept_across_turns(tmp_path, wages_csv):
+    model = scripted(["Estimar lwage sobre educ"], [
+        ("ols_fit", FIT), ("plan_update", {"step": 1}),
+        ("next_step", {"text": "Comparar [[eq_educ]] con un modelo IV."}),
+        ("next_step", {"text": "Revisar [[eq_fantasma]]."}),  # an object that does not exist is refused and retried
+        ("next_step", {"text": "Contrastar heterocedasticidad."}),
+        ("next_step_done", {"step": 2}),
+        "Hecho.",
+    ])
+    c = client(tmp_path, wages_csv, model)
+    evs = events(c.post("/chat", json={"message": "estima"}))
+
+    lists = [e["items"] for e in evs if e["type"] == "next_steps"]
+    assert [s["text"] for s in lists[-1]] == ["Comparar [[eq_educ]] con un modelo IV.",
+                                              "Contrastar heterocedasticidad."]
+    assert lists[-1][0]["objects"] == ["eq_educ"] and [s["done"] for s in lists[-1]] == [False, True]
+    assert [e["name"] for e in evs if e["type"] == "tool_call"] == ["ols_fit"]  # bookkeeping is not a cell
+    assert [s["id"] for s in c.get("/chat/next-steps").json()] == ["n1", "n2"]
+
+    added = c.post("/chat/next-steps", json={"text": "Probar [[eq_educ]] con errores HC3"}).json()
+    assert added[-1]["author"] == "user" and added[-1]["id"] == "n3" and added[-1]["objects"] == ["eq_educ"]
+    assert c.post("/chat/next-steps", json={"text": "  "}).status_code == 400
+    edited = c.patch("/chat/next-steps/n2", json={"done": False}).json()
+    assert edited[1]["done"] is False
+    assert [s["id"] for s in c.delete("/chat/next-steps/n1").json()] == ["n2", "n3"]
+    assert c.delete("/chat/next-steps/n9").status_code == 404
+
+    # They survive the session (they are saved with the conversation) and the agent reads them every turn.
+    chat = c.app.state.engine.chat
+    from qtrix_engine.agents.lead import ChatSession, workspace_context
+
+    saved = ChatSession()
+    saved.restore([], [], None, chat.next_steps.dump())
+    assert [s["text"] for s in saved.next_steps.items] == [s["text"] for s in chat.next_steps.items]
+    assert "## Next steps of this conversation" in workspace_context()
+    chat.reset()
+    assert c.get("/chat/next-steps").json() == []
+
+
+def test_the_executor_is_offered_the_next_step_tools(tmp_path, wages_csv):
+    offered: list[str] = []
+
+    async def run(messages, info: AgentInfo):
+        offered.extend(t.name for t in info.function_tools)
+        yield "Hola."
+
+    model = scripted(["Estimar"], [])
+    c = client(tmp_path, wages_csv, FunctionModel(model.function, stream_function=run))
+    c.post("/chat", json={"message": "estima"})
+    assert {"next_step", "next_step_done"} <= set(offered)
+
+
+def test_a_turn_whose_agent_left_no_next_steps_gets_them_from_its_answer(tmp_path, wages_csv):
+    model = scripted(["Estimar lwage sobre educ"], [
+        ("ols_fit", FIT), ("plan_update", {"step": 1}), "El retorno de la educación es 0.08 en [[eq_educ]].",
+    ])
+    c = client(tmp_path, wages_csv, model)
+    evs = events(c.post("/chat", json={"message": "estima"}))
+
+    lists = [e["items"] for e in evs if e["type"] == "next_steps"]
+    # A reference to an object that does not exist loses its brackets: it would be a dead link.
+    assert [s["text"] for s in lists[-1]] == ["Estimar [[eq_educ]] por IV.", "Revisar eq_fantasma."]
+    assert lists[-1][0]["objects"] == ["eq_educ"] and lists[-1][1]["objects"] == []
+    # The next turn does not add them twice.
+    c.post("/chat", json={"message": "estima otra vez"})
+    assert len(c.get("/chat/next-steps").json()) == 2
 
 
 def test_a_turn_without_plan_has_no_workspace_until_the_agent_writes_one(tmp_path, wages_csv):

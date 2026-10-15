@@ -31,6 +31,7 @@ import {
   type ContextUsage,
   type Dataset,
   type MethodArea,
+  type NextStep,
   type PlanStep,
   type Scratch,
 } from "./api";
@@ -46,6 +47,14 @@ import { Markdown } from "./blocks";
 import { describeAction, words } from "./actions";
 import { CodeCell, TurnCode } from "./cells";
 import { T } from "./i18n";
+
+/** The conversation's next steps and the user's way to change them (``useChat().steps``). */
+export interface NextStepsApi {
+  items: NextStep[];
+  add(text: string): Promise<unknown>;
+  toggle(id: string, done: boolean): Promise<unknown>;
+  remove(id: string): Promise<unknown>;
+}
 
 export interface Turn {
   key: string;
@@ -121,6 +130,7 @@ export function useChat(
   const [busy, setBusy] = useState(false);
   const [context, setContext] = useState<ContextUsage | null>(null);
   const [compacting, setCompacting] = useState(false);
+  const [nextSteps, setNextSteps] = useState<NextStep[]>([]);
   const abort = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
   const reportingRef = useRef(onReporting);
@@ -138,11 +148,16 @@ export function useChat(
   useEffect(() => {
     setTurns([]);
     setContext(null);
+    setNextSteps([]);
     if (!conversation) return;
     let cancelled = false;
     api
       .history()
       .then((h) => !cancelled && setTurns(turnsFrom(h)))
+      .catch(() => {});
+    api
+      .nextSteps()
+      .then((n) => !cancelled && setNextSteps(n))
       .catch(() => {});
     refreshContext();
     return () => {
@@ -187,6 +202,9 @@ export function useChat(
       }
       case "plan":
         patchLast((t) => ({ ...t, plan: ev.steps, status: undefined }));
+        break;
+      case "next_steps":
+        setNextSteps(ev.items);
         break;
       case "scratch":
         patchLast((t) => ({ ...t, scratch: { goal: ev.goal, notes: ev.notes } }));
@@ -272,6 +290,7 @@ export function useChat(
   const reset = () =>
     api.resetChat().then(() => {
       setTurns([]);
+      setNextSteps([]);
       refreshContext();
     });
   /** Fold the conversation into a summary now (the meter's button). */
@@ -285,7 +304,15 @@ export function useChat(
     }
   };
 
-  return { turns, busy, send, stop, reset, context, compacting, compact, refreshContext };
+  // The user's edits of the next steps: the engine answers with the whole list.
+  const steps = {
+    items: nextSteps,
+    add: (text: string) => api.addNextStep(text).then(setNextSteps),
+    toggle: (id: string, done: boolean) => api.editNextStep(id, { done }).then(setNextSteps),
+    remove: (id: string) => api.removeNextStep(id).then(setNextSteps),
+  };
+
+  return { turns, busy, send, stop, reset, context, compacting, compact, refreshContext, steps };
 }
 
 const fmtTokens = (n: number) =>

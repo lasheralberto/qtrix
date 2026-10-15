@@ -184,6 +184,11 @@ class PlanRequest(BaseModel):
     message: str
 
 
+class NextStepRequest(BaseModel):
+    text: str | None = None
+    done: bool | None = None
+
+
 class ApiKeyRequest(BaseModel):
     provider: str
     key: str | None = None
@@ -1507,6 +1512,32 @@ def create_app(settings: Settings | None = None, *, model_override: Any = None, 
     async def chat_reset() -> dict[str, bool]:
         engine.chat.reset()
         return {"ok": True}
+
+    # ---- next steps: what is left to do in the conversation, shared by the user and the agent -----------------------
+    @app.get("/chat/next-steps")
+    async def next_steps_list() -> list[dict[str, Any]]:
+        return engine.chat.next_steps.dump()
+
+    @app.post("/chat/next-steps")
+    async def next_steps_add(req: NextStepRequest) -> list[dict[str, Any]]:
+        try:
+            return engine.chat.edit_next_steps(add=req.text or "")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.patch("/chat/next-steps/{step_id}")
+    async def next_steps_edit(step_id: str, req: NextStepRequest) -> list[dict[str, Any]]:
+        try:
+            return engine.chat.edit_next_steps(ref=step_id, done=req.done, text=req.text)
+        except KeyError as exc:
+            raise HTTPException(404, f"No next step '{step_id}'.") from exc
+
+    @app.delete("/chat/next-steps/{step_id}")
+    async def next_steps_delete(step_id: str) -> list[dict[str, Any]]:
+        try:
+            return engine.chat.edit_next_steps(ref=step_id, remove=True)
+        except KeyError as exc:
+            raise HTTPException(404, f"No next step '{step_id}'.") from exc
 
     @app.get("/chat/context")
     async def chat_context() -> dict[str, Any]:

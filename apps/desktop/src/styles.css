@@ -597,6 +597,17 @@ button.link { border: none; background: none; padding: 0; color: var(--accent); 
 .ws-ideas { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 5px; line-height: 1.45; }
 .ws-ideas li::marker { color: var(--warm); }
 .ws-ideas strong { color: var(--ink); font-weight: 600; }
+.ws-next .ws-task { align-items: center; }
+.ws-next .ws-task > span { flex: 1; min-width: 0; }
+.ws-next .ws-task.done > span { color: var(--ink-3); text-decoration: line-through; }
+.ws-next-check { padding: 0; border: 0; background: none; display: inline-flex; color: var(--ink-3); cursor: pointer; }
+.ws-next .ws-task.done .ws-next-check { color: var(--accent); }
+.ws-next-del { opacity: 0; padding: 2px; }
+.ws-next .ws-task:hover .ws-next-del, .ws-next-del:focus-visible { opacity: 1; }
+.ws-ref { display: inline-flex; align-items: center; gap: 4px; margin: 0 2px; vertical-align: baseline; cursor: pointer; }
+.ws-next-add { margin-top: 8px; }
+.ws-next-add input { width: 100%; font: inherit; font-size: 12.5px; padding: 6px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+.ws-next-add input:focus { outline: none; border-color: var(--accent); }
 .ws-objects { display: flex; flex-wrap: wrap; gap: 6px; }
 .ws-object { font: 11.5px var(--mono); padding: 3px 9px; border-radius: 999px; background: var(--surface); box-shadow: var(--shadow-sm); }
 .ws-object:hover { border-color: var(--accent); color: var(--accent); }
