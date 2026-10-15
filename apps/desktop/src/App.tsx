@@ -1,8 +1,8 @@
 // Workbench layout: notebooks, their conversations and their data in the rail · one analysis panel where the
 // conversation and its results live together (E7·08c). The panel shows one conversation of the active notebook; every
 // conversation of a notebook works on its datasets and objects (E8·04).
-import { Eraser, LibraryBig, PanelLeft, PanelRight, Redo2, Settings, Sparkles, Undo2, Users } from "lucide-react";
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Building2, Eraser, LibraryBig, PanelLeft, PanelRight, Redo2, Settings, Sparkles, Undo2, Users } from "lucide-react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   api,
   notebooks as notebookApi,
@@ -32,6 +32,9 @@ import { TeamModal } from "./team";
 import { ThreadList } from "./threads";
 import { Workspace } from "./workspace";
 import { ModeSelect, usePlan, type Mode } from "./plan";
+
+// The 3D office pulls in three.js: it loads the first time it is opened.
+const Office = lazy(() => import("./office/Office").then((m) => ({ default: m.Office })));
 
 function applyPanelEvent(blocks: Block[], ev: PanelEvent): Block[] {
   switch (ev.op) {
@@ -72,6 +75,7 @@ export default function App() {
   const [openDataset, setOpenDataset] = useState<Dataset | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showTeam, setShowTeam] = useState(false);
+  const [showOffice, setShowOffice] = useState(false);
   const [showModels, setShowModels] = useState(false);
   // The method catalog; the area the modal opens on (null = the first one), undefined while it is closed.
   const methods = useMethods();
@@ -88,6 +92,7 @@ export default function App() {
   const [railOpen, setRailOpen] = useState(true);
   const toggleRail = () => setRailOpen((o) => !o);
   const closeWorkspace = useCallback(() => setWsOpen(false), []);
+  const closeOffice = useCallback(() => setShowOffice(false), []);
   const closeMethods = useCallback(() => setMethodsArea(undefined), []);
   const composer = useRef<ComposerHandle>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -484,6 +489,9 @@ export default function App() {
               <LibraryBig size={15} /> {T("app.methods")}
             </button>
           )}
+          <button className="ghost wide" disabled={!settings} onClick={() => setShowOffice(true)}>
+            <Building2 size={15} /> {T("office.button")}
+          </button>
           <button className="ghost wide" disabled={!settings} onClick={() => setShowTeam(true)}>
             <Users size={15} /> {T("team.button")}
             {settings?.team?.enabled && <span className="muted small team-badge">{settings.team.agents.filter((a) => a.enabled).length}</span>}
@@ -630,6 +638,22 @@ export default function App() {
       )}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} onSaved={setSettings} />}
       {showTeam && settings && <TeamModal settings={settings} onClose={() => setShowTeam(false)} onSaved={setSettings} />}
+      {showOffice && (
+        <Suspense fallback={<div className="office" />}>
+        <Office
+          team={settings?.team}
+          turns={turns}
+          turnKey={wsTurn}
+          onSelectTurn={setWsTurn}
+          reporting={reporting}
+          onOpenObject={(name, blockId) => {
+            setShowOffice(false);
+            openObject(name, blockId);
+          }}
+          onClose={closeOffice}
+        />
+        </Suspense>
+      )}
       {showModels && <ModelsModal onClose={() => setShowModels(false)} />}
       {methods && methodsArea !== undefined && (
         <MethodsModal

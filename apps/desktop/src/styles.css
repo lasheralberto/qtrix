@@ -813,3 +813,20 @@ body.report-printing .report-page { width: auto; min-height: 0; margin: 0; paddi
 .team-count { padding: 4px 10px; margin: 0; }
 .team-error { color: var(--warm); margin-right: auto; }
 .team-badge { margin-left: auto; }
+
+/* The 3D office: full-screen overlay; the canvas fills the stage, the bar and the panel float over it. */
+.office { position: fixed; inset: 0; z-index: 60; background: #dbeafe; display: flex; flex-direction: column; }
+.office-top { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.office-title { font-weight: 600; white-space: nowrap; }
+.office-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.office-stage { position: relative; flex: 1; min-height: 0; }
+.office-stage canvas { outline: none; }
+.office-nowebgl { height: 100%; margin: 0 auto; text-align: center; max-width: 420px; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; }
+.office-bar { position: absolute; z-index: 20; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; gap: 6px; padding: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; box-shadow: var(--shadow); max-width: calc(100% - 32px); overflow-x: auto; }
+.office-chip { border-radius: 999px; padding: 6px 12px 6px 9px; border-color: transparent; flex: none; }
+.office-chip.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.office-chip-name { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.office-panel { position: absolute; z-index: 20; top: 12px; right: 14px; bottom: 76px; width: 420px; max-width: calc(100% - 28px); display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); animation: enter 0.25s ease-out; }
+.office-panel .ws-head { padding: 10px 12px 6px; border-bottom: 1px solid var(--line); }
+.office-report h3 { margin: 0 0 6px; font-family: var(--serif); font-size: 17px; }
+.office-report h4 { margin: 12px 0 4px; font-size: 12.5px; }
