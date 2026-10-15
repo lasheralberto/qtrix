@@ -94,6 +94,43 @@ class PlanDraft(BaseModel):
                                     description='Approaches weighed, each "approach: why chosen or discarded".')
     questions: list[str] = Field(default_factory=list, max_length=3,
                                  description="Questions the user must answer before anything runs; then no steps.")
+    delegations: list[AgentTask] = Field(default_factory=list, max_length=10,
+                                         description="Parts of the request handed to team members; empty without a "
+                                                     "team or when you handle it alone.")
+
+
+class AgentTask(BaseModel):
+    """A part of the request the lead hands to one member of its team."""
+
+    agent_id: str = Field(description="Id of the team member, exactly as in the roster.")
+    task: str = Field(description="The self-contained task for that member, in the user's language: what to do, on "
+                                  "which data, and what to report back.")
+
+
+PlanDraft.model_rebuild()
+
+TEAM_PLANNER_INSTRUCTIONS = """\
+
+## Your team
+The lead executor works with the specialists below. Whenever the request needs tools, the work is theirs: hand
+EVERY part of it over in `delegations` (agent_id and a self-contained task), split by the members' roles, so that
+each one works on what fits it; a request with one part goes to the one member whose role fits best. Only a
+message that needs no tools (a greeting, a question answerable from the conversation) has no delegations. Each
+member works alone and in order, sees the objects the earlier ones built and remembers its own earlier conclusions
+in this conversation, so a follow-up goes to the member that did the related work. The lead then gives the final
+answer from their conclusions; your `steps` are only what the lead itself still has to do (usually none).
+"""
+
+
+def roster_text(members: Sequence[Any]) -> str:
+    """The team as the planner sees it: one line per member (``id``, ``name``, ``behavior``, ``skills``)."""
+    lines = []
+    for m in members:
+        role = " ".join(m.behavior.split())
+        role = role if len(role) <= 300 else role[:300] + "…"
+        skills = f" (skills: {', '.join(m.skills)})" if m.skills else ""
+        lines.append(f"- {m.id}: {m.name}" + (f" — {role}" if role else "") + skills)
+    return "\n".join(lines)
 
 
 @dataclass
@@ -450,9 +487,11 @@ def tool_catalog(namespaces: Sequence[str] | None = None) -> str:
     return "\n".join(lines)
 
 
-def build_planner(model: Any, *, namespaces: Sequence[str] | None = None) -> Agent[None, PlanDraft]:
+def build_planner(model: Any, *, namespaces: Sequence[str] | None = None, roster: str = "") -> Agent[None, PlanDraft]:
+    """``roster`` (``roster_text``) lists the team the planner may delegate to; without one it never delegates."""
+    team = TEAM_PLANNER_INSTRUCTIONS + roster + "\n" if roster else "\nThere is no team: leave `delegations` empty.\n"
     return Agent(model, name="planner", output_type=PlanDraft, retries=2,
-                 instructions=PLANNER_INSTRUCTIONS + "\n## Executor tools\n" + tool_catalog(namespaces))
+                 instructions=PLANNER_INSTRUCTIONS + team + "\n## Executor tools\n" + tool_catalog(namespaces))
 
 
 def build_plan_drafter(model: Any, *, namespaces: Sequence[str] | None = None) -> Agent[None, str]:

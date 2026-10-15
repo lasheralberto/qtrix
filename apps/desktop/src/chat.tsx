@@ -56,9 +56,8 @@ export interface NextStepsApi {
   remove(id: string): Promise<unknown>;
 }
 
-export interface Turn {
-  key: string;
-  question: string;
+/** What an agent did in a turn, as its workspace shows it: the lead's own work, or a team member's. */
+export interface Work {
   text: string;
   tools: CellInfo[];
   /** The planner's steps for this turn, settled by the agent as it works (none for turns that needed no tools). */
@@ -70,10 +69,26 @@ export interface Turn {
   error?: string;
   status?: string;
   running: boolean;
+}
+
+/** A team member's work in a turn: the task the lead gave it; ``text`` is its conclusions. */
+export interface AgentWork extends Work {
+  id: string;
+  name: string;
+  emoji?: string;
+  task: string;
+  ok?: boolean;
+}
+
+export interface Turn extends Work {
+  key: string;
+  question: string;
   /** The panel block that was last when the turn started: the turn sits right after it (null = top of the panel). */
   after: string | null;
   /** The conversation filled the model's context and was folded into a summary before this turn. */
   compacted?: boolean;
+  /** The team members the lead handed parts of the request to, in the order they worked. */
+  agents?: AgentWork[];
 }
 
 export const SUGGESTIONS = [
@@ -114,8 +129,60 @@ function turnsFrom(history: ChatTurn[]): Turn[] {
     last.plan = m.plan;
     last.scratch = m.scratch;
     last.intro = m.intro;
+    last.agents = m.agents?.map((a) => ({
+      id: a.id,
+      name: a.name,
+      emoji: a.emoji,
+      task: a.task,
+      ok: a.ok,
+      text: a.content ?? "",
+      tools: a.cells ?? [],
+      plan: a.plan,
+      scratch: a.scratch,
+      intro: a.intro,
+      running: false,
+    }));
   }
   return turns;
+}
+
+/** An event of an agent's work applied to its workspace (the lead's turn or a member's); others leave it as it is. */
+function applyWork<W extends Work>(w: W, ev: ChatEvent): W {
+  switch (ev.type) {
+    case "text":
+      return { ...w, text: w.text + ev.delta };
+    case "tool_call": {
+      const { type: _, agent: __, ...cell } = ev;
+      // A phase message ("Planificando…") is over once the agent acts.
+      return { ...w, tools: [...w.tools, cell], status: undefined };
+    }
+    case "tool_result": {
+      const { type: _, agent: __, ...res } = ev;
+      // Keep what the call announced when the result has no value for it (the code may only come with the call).
+      const filled = Object.fromEntries(Object.entries(res).filter(([, v]) => v !== null && v !== undefined));
+      return { ...w, tools: w.tools.map((c) => (c.id === ev.id ? { ...c, ...filled } : c)) };
+    }
+    case "plan":
+      return { ...w, plan: ev.steps, status: undefined };
+    case "scratch":
+      return { ...w, scratch: { goal: ev.goal, notes: ev.notes } };
+    case "finding": {
+      // The text was streamed as answer: move it to the cells it explains (or to the intro).
+      const text = ev.strip ? w.text.slice(0, Math.max(0, w.text.length - ev.strip)) : w.text;
+      if (!ev.text) return { ...w, text };
+      if (!ev.ids.length) return { ...w, text, intro: [w.intro, ev.text].filter(Boolean).join("\n\n") };
+      const tools = w.tools.map((c) =>
+        ev.ids.includes(c.id) ? { ...c, finding: [c.finding, ev.text].filter(Boolean).join("\n\n") } : c,
+      );
+      return { ...w, text, tools };
+    }
+    case "status":
+      return { ...w, status: ev.message };
+    case "error":
+      return { ...w, error: ev.message };
+    default:
+      return w;
+  }
 }
 
 /** Chat state for the unified panel: the turns, whether the agent is working, and how to talk to it. */
@@ -170,6 +237,9 @@ export function useChat(
       prev.length ? [...prev.slice(0, -1), fn(prev[prev.length - 1])] : prev,
     );
 
+  const patchAgent = (id: string, fn: (a: AgentWork) => AgentWork) =>
+    patchLast((t) => ({ ...t, agents: t.agents?.map((a) => (a.id === id ? fn(a) : a)) }));
+
   function handle(ev: ChatEvent) {
     switch (ev.type) {
       case "turn":
@@ -179,65 +249,22 @@ export function useChat(
           after: ev.after_block ?? t.after,
         }));
         break;
-      case "text":
-        patchLast((t) => ({ ...t, text: t.text + ev.delta }));
-        break;
-      case "tool_call": {
-        const { type: _, ...cell } = ev;
-        // A phase message ("Planificando…") is over once the agent acts.
-        patchLast((t) => ({ ...t, tools: [...t.tools, cell], status: undefined }));
-        break;
-      }
-      case "tool_result": {
-        const { type: _, ...res } = ev;
-        // Keep what the call announced when the result has no value for it (the code may only come with the call).
-        const filled = Object.fromEntries(
-          Object.entries(res).filter(([, v]) => v !== null && v !== undefined),
-        );
+      case "agent_spawn":
         patchLast((t) => ({
           ...t,
-          tools: t.tools.map((c) => (c.id === ev.id ? { ...c, ...filled } : c)),
+          status: undefined,
+          agents: [
+            ...(t.agents ?? []),
+            { id: ev.agent, name: ev.name, emoji: ev.emoji, task: ev.task, text: "", tools: [], running: true },
+          ],
         }));
         break;
-      }
-      case "plan":
-        patchLast((t) => ({ ...t, plan: ev.steps, status: undefined }));
+      case "agent_done":
+        // Its conclusions as the engine kept them (the findings already left the streamed text).
+        patchAgent(ev.agent, (a) => ({ ...a, running: false, ok: ev.ok, status: undefined, text: ev.content || a.text }));
         break;
       case "next_steps":
         setNextSteps(ev.items);
-        break;
-      case "scratch":
-        patchLast((t) => ({ ...t, scratch: { goal: ev.goal, notes: ev.notes } }));
-        break;
-      case "finding":
-        // The text was streamed as answer: move it to the cells it explains (or to the intro).
-        patchLast((t) => {
-          const text = ev.strip
-            ? t.text.slice(0, Math.max(0, t.text.length - ev.strip))
-            : t.text;
-          if (!ev.text) return { ...t, text };
-          if (!ev.ids.length)
-            return {
-              ...t,
-              text,
-              intro: [t.intro, ev.text].filter(Boolean).join("\n\n"),
-            };
-          const tools = t.tools.map((c) =>
-            ev.ids.includes(c.id)
-              ? {
-                  ...c,
-                  finding: [c.finding, ev.text].filter(Boolean).join("\n\n"),
-                }
-              : c,
-          );
-          return { ...t, text, tools };
-        });
-        break;
-      case "status":
-        patchLast((t) => ({ ...t, status: ev.message }));
-        break;
-      case "error":
-        patchLast((t) => ({ ...t, error: ev.message }));
         break;
       case "context":
         updateContext(ev);
@@ -249,6 +276,9 @@ export function useChat(
         updateContext(ev);
         patchLast((t) => ({ ...t, compacted: true }));
         break;
+      default:
+        if (ev.agent) patchAgent(ev.agent, (a) => applyWork(a, ev));
+        else patchLast((t) => applyWork(t, ev));
     }
   }
 
@@ -277,7 +307,7 @@ export function useChat(
         if ((err as Error).name !== "AbortError")
           patchLast((t) => ({ ...t, error: String(err) }));
       } finally {
-        patchLast((t) => ({ ...t, running: false }));
+        patchLast((t) => ({ ...t, running: false, agents: t.agents?.map((a) => ({ ...a, running: false })) }));
         busyRef.current = false;
         setBusy(false);
       }

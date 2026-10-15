@@ -11,7 +11,7 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 ProviderName = Literal[
     "llamacpp", "ollama", "lmstudio", "openai_compatible", "anthropic", "openai", "google", "mistral",
@@ -63,6 +63,64 @@ class AgentConfig(BaseModel):
     max_context: int = Field(default=1_000_000, ge=4096)
 
 
+MAX_TEAM = 10
+
+
+class TeamAgentConfig(BaseModel):
+    """A member of the agent team: a specialist the lead delegates parts of a request to."""
+
+    #: Stable id: the member acts in the journal as ``agent:<id>``.
+    id: str = Field(min_length=1, max_length=40, pattern=r"^[A-Za-z0-9_-]+$")
+    name: str = Field(min_length=1, max_length=60)
+    emoji: str = Field(default="", max_length=8)
+    #: How the member works, added to its instructions.
+    behavior: str = ""
+    #: Skills (by name) the member may load; empty = none.
+    skills: list[str] = Field(default_factory=list)
+    namespaces: list[str] | None = None
+    #: Model profile (by name) the member runs on; None = the active one.
+    profile: str | None = None
+    enabled: bool = True
+
+
+#: The team's default member: the lead econometrician itself, always present and first.
+LEAD_ID = "lead"
+
+
+def default_lead(behavior: str = "") -> TeamAgentConfig:
+    """The default member as a new install gets it: every skill of the library."""
+    from ..agents.skills import list_skills  # late: the skills module pulls in the agent harness
+
+    return TeamAgentConfig(id=LEAD_ID, name="Lead econometrician", emoji="🎓", behavior=behavior,
+                           skills=[s["name"] for s in list_skills()])
+
+
+class TeamConfig(BaseModel):
+    #: Whether the lead may hand work to the other members; the default member always works.
+    enabled: bool = False
+    agents: list[TeamAgentConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _shape(self) -> TeamConfig:
+        ids = [a.id for a in self.agents]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Team members need distinct ids")
+        lead = next((a for a in self.agents if a.id == LEAD_ID), None) or default_lead()
+        lead.enabled = True
+        self.agents = [lead, *(a for a in self.agents if a.id != LEAD_ID)]
+        if len(self.agents) > MAX_TEAM:
+            raise ValueError(f"A team has at most {MAX_TEAM} members, the default one included")
+        return self
+
+    def lead(self) -> TeamAgentConfig:
+        """The default member: the lead econometrician, which answers every turn."""
+        return self.agents[0]
+
+    def active(self) -> list[TeamAgentConfig]:
+        """The members the lead may delegate to: none while the team is off."""
+        return [a for a in self.agents[1:] if a.enabled] if self.enabled else []
+
+
 class LlamaCppConfig(BaseModel):
     """Embedded llama.cpp runtime: which build to install and how to serve models."""
 
@@ -80,6 +138,17 @@ class UserSettings(BaseModel):
     local_only: bool = False
     agent: AgentConfig = Field(default_factory=AgentConfig)
     llamacpp: LlamaCppConfig = Field(default_factory=LlamaCppConfig)
+    team: TeamConfig = Field(default_factory=TeamConfig)
+
+    @model_validator(mode="after")
+    def _lead_behaviour(self) -> UserSettings:
+        # Settings from before the team kept the lead's instructions as the "super-agent"'s: they become the
+        # default member's behaviour, once.
+        if self.agent.instructions_extra.strip():
+            lead = self.team.lead()
+            lead.behavior = lead.behavior or self.agent.instructions_extra
+            self.agent.instructions_extra = ""
+        return self
 
     def active(self) -> ModelProfile:
         for p in self.profiles:

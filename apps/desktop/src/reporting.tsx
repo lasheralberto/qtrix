@@ -159,7 +159,7 @@ function ObjectFigure({ obj, label }: { obj: ReportObjectRef; label: string }) {
 }
 
 /** The report as a document page. Figures and tables are numbered in reading order. */
-function ReportPage({ report, version, title }: { report: ConversationReport; version: number; title: string }) {
+export function ReportPage({ report, version, title }: { report: ConversationReport; version: number; title: string }) {
   let figures = 0;
   let tables = 0;
   const label = (name: string) => (/^gph/.test(name) ? T("reporting.figure", { n: ++figures }) : T("reporting.table", { n: ++tables }));

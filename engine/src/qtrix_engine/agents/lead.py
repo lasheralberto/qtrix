@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import functools
 import inspect
 import json
@@ -193,11 +195,11 @@ COMPACT_NOTE = """\
 """
 
 
-def econometrics_toolset(namespaces: Sequence[str] | None = None, *,
-                         core: frozenset[str] | None = None) -> FunctionToolset:
+def econometrics_toolset(namespaces: Sequence[str] | None = None, *, core: frozenset[str] | None = None,
+                         agent_name: str = AGENT_NAME) -> FunctionToolset:
     """``core`` (compact mode) lists the tools sent with every request; the others are deferred to tool search."""
     tools = [
-        Tool(_wrap(spec), name=spec.name, takes_ctx=False, docstring_format="google",
+        Tool(_wrap(spec, agent_name), name=spec.name, takes_ctx=False, docstring_format="google",
              prepare=_only_for_structures(spec), defer_loading=core is not None and spec.name not in core)
         for spec in all_tools(namespaces=namespaces)
     ]
@@ -253,8 +255,11 @@ def workspace_context() -> str:
 def build_lead_agent(model: Any, *, namespaces: Sequence[str] | None = None, instructions_extra: str = "",
                      extra_toolsets: Sequence[Any] = (),
                      memory_lookup: Callable[[str], str] | None = None,
-                     skills_library: Path | None = sk.SKILLS_DIR, compact: bool = False) -> Agent:
-    """``skills_library`` holds the method guides (skills) the agent may load; ``None`` gives it none.
+                     skills_library: Path | None = sk.SKILLS_DIR, skills: Sequence[str] | None = None,
+                     compact: bool = False, agent_name: str = AGENT_NAME, roster: str = "") -> Agent:
+    """``skills_library`` holds the method guides (skills) the agent may load; ``None`` gives it none, and ``skills``
+    limits them to those names. ``agent_name`` signs its calls in the journal (``agent:<name>``); ``roster``
+    (``planner.roster_text``) is the team its planner may delegate to.
 
     ``compact`` is for small local models with a short context: only ``COMPACT_CORE`` goes with every request and
     the other tool schemas are loaded on demand through ``search_tools`` (skills are always loaded on demand)."""
@@ -264,14 +269,15 @@ def build_lead_agent(model: Any, *, namespaces: Sequence[str] | None = None, ins
         instructions += COMPACT_NOTE.format(hidden=", ".join(hidden))
     agent = Agent(
         model,
-        name="lead_econometrician",
+        name=agent_name,
         instructions=instructions + ("\n" + instructions_extra if instructions_extra else ""),
-        toolsets=[econometrics_toolset(namespaces, core=COMPACT_CORE if compact else None), pl.plan_toolset(),
-                  *extra_toolsets],
-        capabilities=sk.skill_capabilities(skills_library),
+        toolsets=[econometrics_toolset(namespaces, core=COMPACT_CORE if compact else None, agent_name=agent_name),
+                  pl.plan_toolset(), *extra_toolsets],
+        capabilities=sk.skill_capabilities(skills_library, include=skills),
         retries=TOOL_RETRIES,
     )
-    _helpers[id(agent)] = _Helpers(pl.build_planner(model, namespaces=namespaces), fx.build_explainer(model),
+    _helpers[id(agent)] = _Helpers(pl.build_planner(model, namespaces=namespaces, roster=roster),
+                                   fx.build_explainer(model),
                                    ac.build_compactor(model), rp.build_reporter(model),
                                    pl.build_plan_drafter(model, namespaces=namespaces))
     weakref.finalize(agent, _helpers.pop, id(agent), None)
@@ -286,6 +292,98 @@ def build_lead_agent(model: Any, *, namespaces: Sequence[str] | None = None, ins
         return "\n\n".join(parts)
 
     return agent
+
+
+TEAM_MEMBER_NOTE = """\
+
+## You are a member of a team
+You are {name}, a specialist on the Lead Econometrician's team. The lead hands you one part of the user's request: do
+that task and only that, with the tools, then end with your conclusions (the key numbers, what they mean and the
+caveats); the lead builds the final answer from them. Never ask the user anything: when a choice is open, take the
+sensible default and say so. Name your objects so the lead can tell them apart. Leave next steps to the lead.
+"""
+
+
+@dataclass
+class TeamMember:
+    """A member of the agent team, ready to work: its configuration and the agent built on its model."""
+
+    id: str
+    name: str
+    agent: Agent
+    emoji: str = ""
+
+
+def build_team_agent(model: Any, *, member_id: str, name: str, behavior: str = "", skills: Sequence[str] = (),
+                     namespaces: Sequence[str] | None = None, memory_lookup: Callable[[str], str] | None = None,
+                     compact: bool = False) -> Agent:
+    """A specialist of the team: the lead's tools and workspace, its own behaviour and skills, signing its calls in
+    the journal as ``agent:<member_id>``. It never delegates further."""
+    extra = TEAM_MEMBER_NOTE.format(name=name) + ("\n## How you work\n" + behavior.strip() if behavior.strip() else "")
+    return build_lead_agent(model, namespaces=namespaces, instructions_extra=extra, memory_lookup=memory_lookup,
+                            skills_library=sk.SKILLS_DIR if skills else None, skills=list(skills),
+                            compact=compact, agent_name=member_id)
+
+
+def delegated_prompt(task: str, request: str, earlier: Sequence[str] = (), limit: int = 2500) -> str:
+    """What a team member is asked: its task, with the user's request for context and its own conclusions from the
+    earlier turns of the conversation (``earlier``, oldest first) so it builds on them."""
+    parts = ["[Task from the lead, part of the user's request. Do this task only, then give your conclusions.]\n"
+             + task, f"[The user's request, for context]\n{request}"]
+    shown = [c if len(c) <= limit else c[:limit] + "…" for c in earlier if c.strip()]
+    if shown:
+        parts.append("[Your conclusions from earlier turns of this conversation, oldest first. Build on them: do not "
+                     "redo what they settle, refer to the objects you made, and revise them if the new task shows "
+                     "they were wrong.]\n" + "\n\n---\n\n".join(shown))
+    return "\n\n".join(parts)
+
+
+def earlier_conclusions(transcript: Sequence[dict[str, Any]], member_id: str) -> list[str]:
+    """A member's conclusions in the earlier turns of the conversation, oldest first."""
+    return [str(a.get("content") or "") for m in transcript if m.get("role") == "assistant"
+            for a in m.get("agents") or [] if a.get("id") == member_id and a.get("content")]
+
+
+def team_prompt(agents: Sequence[dict[str, Any]], limit: int = 3000) -> str:
+    """The members' conclusions as they reach the lead, which answers from them."""
+    parts = ["\n\n[Your team has already worked on this request. Their conclusions are below: build your final answer "
+             "from them — the conclusion of the whole analysis. Attribute results to each member, reconcile or "
+             "flag disagreements, and do not redo their work; run tools only for what is still missing.]"]
+    for a in agents:
+        text = (a.get("content") or "").strip() or "(no conclusions: the member failed)"
+        parts.append(f"### {a['name']} — task: {a['task']}\n" + (text if len(text) <= limit else text[:limit] + "…"))
+    return "\n".join(parts)
+
+
+#: Events of a member's own turn that never reach the UI: the turn is the lead's.
+_MEMBER_HIDDEN = frozenset({"turn", "done", "context", "compacted", "next_steps"})
+
+
+async def _in_own_task(events: AsyncIterator[dict[str, Any]]) -> AsyncIterator[dict[str, Any]]:
+    """Iterate ``events`` inside a task of its own: it runs in a copy of the current context, so the turn, plan and
+    workspace a member sets (context variables) never leak into the lead's. Cancelled when the consumer stops."""
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    end = object()
+
+    async def pump() -> None:
+        try:
+            async for ev in events:
+                await queue.put(ev)
+        except Exception as exc:  # noqa: BLE001 - a failed member is reported, the lead goes on
+            log.exception("Team member failed")
+            await queue.put({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+        finally:
+            await queue.put(end)
+
+    task = asyncio.create_task(pump())
+    try:
+        while (ev := await queue.get()) is not end:
+            yield ev
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 def _short(value: Any, limit: int = 1500) -> str:
@@ -486,13 +584,16 @@ class ChatSession:
 
     async def stream(self, agent: Agent, message: str, *, max_tool_calls: int = 40, plan: bool = True,
                      context_window: int | None = None, compact_at: float = 0.8,
-                     approved_plan: str = "") -> AsyncIterator[dict[str, Any]]:
+                     approved_plan: str = "", team: Sequence[TeamMember] = ()) -> AsyncIterator[dict[str, Any]]:
         """One turn, plan-and-execute: the planner drafts the steps, the agent's ReAct loop runs them (and is sent
         back to work while steps are pending), and the turn always closes with a final answer in text.
 
         With a ``context_window``, the history is compacted into a summary whenever it fills ``compact_at`` of it
         (before the turn and between rounds). ``approved_plan`` is a plan the user approved in plan mode: it goes
-        with the request so the planner and the executor follow it; the transcript keeps the bare message."""
+        with the request so the planner and the executor follow it; the transcript keeps the bare message.
+
+        With a ``team``, the planner may hand parts of the request to its members: they work first, one after the
+        other, and the lead's answer builds on their conclusions."""
         ctx = get_context()
         # The panel and the chat are one surface (E7·08c): a turn sits after the last block present when it started.
         blocks = ctx.panel.blocks()
@@ -510,9 +611,10 @@ class ChatSession:
                 yield ev
             helpers = _helpers.get(id(agent))
             talk_only = False
+            delegations: list[pl.AgentTask] = []
             if plan and helpers is not None:
                 yield {"type": "status", "message": "Planificando…"}
-                state.plan, state.scratch, drafted, questions = await self._draft_plan(
+                state.plan, state.scratch, drafted, questions, delegations = await self._draft_plan(
                     helpers.planner, request, earlier)
                 if questions:  # the plan is blocked on the user: nothing runs until they answer
                     for ev in state.say(pl.questions_text(questions)):
@@ -525,6 +627,16 @@ class ChatSession:
                     yield {"type": "plan", "steps": state.plan.dump()}
                 if state.scratch:
                     yield {"type": "scratch", **state.scratch.dump()}
+            ids = {m.id for m in team}
+            tasks = [d for d in delegations if d.agent_id in ids] if not state.asked else []
+            # With a team the work is the members': a plan the planner did not split goes whole to every member.
+            if team and not tasks and not state.asked and state.plan.steps:
+                tasks = [pl.AgentTask(agent_id=m.id, task=message) for m in team]
+            if tasks:
+                async for ev in self._run_team(team, tasks, request, state, plan=plan,
+                                               budget=max(8, max_tool_calls // (len(tasks) + 1))):
+                    yield ev
+                request += team_prompt(state.agents)
             prompt = pl.executor_prompt(request, state.plan)
             with (pl.active_plan(state.plan if state.plan.steps else None), pl.active_scratch(state.scratch),
                   pl.active_next(self.next_steps), pl.asking(state.asked)):
@@ -596,6 +708,8 @@ class ChatSession:
                 entry["scratch"] = state.scratch.dump()
             if state.intro:
                 entry["intro"] = state.intro
+            if state.agents:
+                entry["agents"] = state.agents
             self.transcript.append(entry)
             if self.on_change is not None:
                 self.on_change()
@@ -616,22 +730,55 @@ class ChatSession:
         yield {"type": "compacted", **info}
 
     @staticmethod
-    async def _draft_plan(planner: Agent[None, pl.PlanDraft], request: str,
-                          earlier: list[dict[str, Any]]) -> tuple[pl.Plan, pl.Scratch, bool, list[str]]:
+    async def _draft_plan(planner: Agent[None, pl.PlanDraft], request: str, earlier: list[dict[str, Any]],
+                          ) -> tuple[pl.Plan, pl.Scratch, bool, list[str], list[pl.AgentTask]]:
         """The plan of the turn, the workspace it opens with (the goal and the alternatives weighed), whether the
-        planner answered at all (an empty plan from a failed planner does not mean there is nothing to do) and the
-        questions the user must answer before anything runs (then there are no steps)."""
+        planner answered at all (an empty plan from a failed planner does not mean there is nothing to do), the
+        questions the user must answer before anything runs (then there are no steps) and the tasks it hands to the
+        team."""
         try:
             result = await planner.run(pl.planner_prompt(request, workspace_context(), earlier),
                                        usage_limits=UsageLimits(request_limit=3))
             draft = result.output
             questions = [q.strip() for q in draft.questions if q and q.strip()]
             if questions:
-                return pl.Plan(), pl.Scratch(), True, questions
-            return pl.Plan.of(draft.steps), pl.Scratch.of(draft), True, []
+                return pl.Plan(), pl.Scratch(), True, questions, []
+            scratch = pl.Scratch.of(draft)
+            if draft.delegations and not scratch.goal:  # a turn the team does whole still has a goal to show
+                scratch.goal = draft.goal.strip()
+            return pl.Plan.of(draft.steps), scratch, True, [], list(draft.delegations)
         except Exception as exc:  # noqa: BLE001 - planning is an aid: without a plan the agent still works
             log.warning("Planner failed, running without a plan: %s", exc)
-            return pl.Plan(), pl.Scratch(), False, []
+            return pl.Plan(), pl.Scratch(), False, [], []
+
+    async def _run_team(self, team: Sequence[TeamMember], tasks: Sequence[pl.AgentTask], request: str,
+                        state: _TurnState, *, budget: int, plan: bool) -> AsyncIterator[dict[str, Any]]:
+        """The members' turns, one after the other (each sees the objects the earlier ones built). A member works in
+        a conversation of its own and its events reach the UI tagged with ``agent``; what it did is kept in
+        ``state.agents`` for the lead, the transcript and the report."""
+        members = {m.id: m for m in team}
+        for task in tasks:
+            member = members.get(task.agent_id)
+            if member is None or not task.task.strip():
+                continue
+            label = f"{member.emoji} {member.name}".strip()
+            yield {"type": "agent_spawn", "agent": member.id, "name": member.name, "emoji": member.emoji,
+                   "task": task.task}
+            yield {"type": "status", "message": f"{label} trabajando…"}
+            session = ChatSession()
+            ok = True
+            prompt = delegated_prompt(task.task, request, earlier_conclusions(self.transcript, member.id))
+            async for ev in _in_own_task(session.stream(member.agent, prompt, max_tool_calls=budget, plan=plan)):
+                if ev["type"] == "error":  # the member's failure, not the turn's: shown on its tab only
+                    ok = False
+                    continue
+                if ev["type"] not in _MEMBER_HIDDEN:
+                    yield {**ev, "agent": member.id}
+            entry = next((m for m in reversed(session.transcript) if m["role"] == "assistant"), {})
+            work = {"id": member.id, "name": member.name, "emoji": member.emoji, "task": task.task, "ok": ok,
+                    **{k: entry[k] for k in ("content", "turn_id", "cells", "plan", "scratch", "intro") if k in entry}}
+            state.agents.append(work)
+            yield {"type": "agent_done", "agent": member.id, "ok": ok, "content": work.get("content", "")}
 
     def _add_follow_ups(self, texts: list[str]) -> bool:
         """The explainer's follow-ups as next steps: a reference to an object that does not exist loses its brackets,
@@ -788,6 +935,7 @@ class _TurnState:
     stopped: bool = False  # the loop hit its tool budget or ran out of retries
     asked: list[str] = field(default_factory=list)  # questions the turn stops on, until the user answers
     noted_next: bool = False  # the agent wrote or closed a next step itself
+    agents: list[dict[str, Any]] = field(default_factory=list)  # what each team member did in this turn, in order
 
     def objects(self) -> list[str]:
         """Names of the objects the turn's cells produced, once each, in order."""

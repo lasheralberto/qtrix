@@ -17,7 +17,8 @@ from __future__ import annotations
 import asyncio
 import os
 import posixpath
-from collections.abc import Sequence
+import re
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Never
@@ -124,10 +125,38 @@ class SkillWorkspace(AbstractCapability[Any]):
         return ReadOnlyWorkspace(Workspace(backend))
 
 
-def skill_capabilities(library: Path | None = SKILLS_DIR) -> list[AbstractCapability[Any]]:
-    """The capabilities that give an agent the skills of ``library`` (none without a library or skills in it)."""
+_FRONTMATTER = re.compile(r"\A---\s*\n(.*?)\n---", re.S)
+
+
+def list_skills(library: Path = SKILLS_DIR) -> list[dict[str, str]]:
+    """The skills of ``library`` (child folders with a ``SKILL.md``): name and description from its frontmatter."""
+    if not library.is_dir():
+        return []
+    out: list[dict[str, str]] = []
+    for folder in sorted(library.iterdir(), key=lambda d: d.name):
+        skill = folder / "SKILL.md"
+        if not skill.is_file():
+            continue
+        meta: dict[str, str] = {}
+        m = _FRONTMATTER.match(skill.read_text(encoding="utf-8"))
+        for line in (m[1] if m else "").splitlines():
+            key, sep, value = line.partition(":")
+            if sep and key.strip() in ("name", "description"):
+                meta[key.strip()] = value.strip().strip("\"'")
+        out.append({"name": meta.get("name") or folder.name, "description": meta.get("description", "")})
+    return out
+
+
+def skill_capabilities(library: Path | None = SKILLS_DIR, *,
+                       include: Collection[str] | None = None) -> list[AbstractCapability[Any]]:
+    """The capabilities that give an agent the skills of ``library`` (none without a library or skills in it).
+    ``include`` limits them to those names; names the library does not have are ignored."""
     if library is None or not library.is_dir() or not any((d / "SKILL.md").is_file() for d in library.iterdir()):
         return []
+    if include is not None:
+        include = {s["name"] for s in list_skills(library)} & set(include)
+        if not include:
+            return []
     files = FileSystem(read_only=True, tools=FILE_TOOLS, content_hashes=False, max_read_chars=30_000,
                        denied_patterns=("**/.git/**",))
-    return [SkillWorkspace(library), Skills("."), files]
+    return [SkillWorkspace(library), Skills(".", include=include), files]

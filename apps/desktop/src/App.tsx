@@ -1,7 +1,7 @@
 // Workbench layout: notebooks, their conversations and their data in the rail · one analysis panel where the
 // conversation and its results live together (E7·08c). The panel shows one conversation of the active notebook; every
 // conversation of a notebook works on its datasets and objects (E8·04).
-import { Eraser, LibraryBig, PanelLeft, PanelRight, Redo2, Settings, Sparkles, Undo2 } from "lucide-react";
+import { Eraser, LibraryBig, PanelLeft, PanelRight, Redo2, Settings, Sparkles, Undo2, Users } from "lucide-react";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   api,
@@ -28,6 +28,7 @@ import { DraftCell, NotebookRibbon, type Draft } from "./notebook";
 import { EditableTitle, NotebookList, UNTITLED } from "./notebooks";
 import { ReportDocument, ReportingToggle, useReporting } from "./reporting";
 import { SettingsModal } from "./settings";
+import { TeamModal } from "./team";
 import { ThreadList } from "./threads";
 import { Workspace } from "./workspace";
 import { ModeSelect, usePlan, type Mode } from "./plan";
@@ -70,6 +71,7 @@ export default function App() {
   const [fresh, setFresh] = useState<Set<string>>(new Set());
   const [openDataset, setOpenDataset] = useState<Dataset | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showTeam, setShowTeam] = useState(false);
   const [showModels, setShowModels] = useState(false);
   // The method catalog; the area the modal opens on (null = the first one), undefined while it is closed.
   const methods = useMethods();
@@ -482,6 +484,10 @@ export default function App() {
               <LibraryBig size={15} /> {T("app.methods")}
             </button>
           )}
+          <button className="ghost wide" disabled={!settings} onClick={() => setShowTeam(true)}>
+            <Users size={15} /> {T("team.button")}
+            {settings?.team?.enabled && <span className="muted small team-badge">{settings.team.agents.filter((a) => a.enabled).length}</span>}
+          </button>
           <button className="ghost wide" onClick={() => setShowSettings(true)}>
             <Settings size={15} /> {T("app.settings")}
           </button>
@@ -593,6 +599,7 @@ export default function App() {
         onClose={closeWorkspace}
         onOpenObject={openObject}
         steps={steps}
+        lead={settings?.team?.agents[0]}
         plan={
           plans.plan && {
             draft: plans.plan,
@@ -622,6 +629,7 @@ export default function App() {
         />
       )}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} onSaved={setSettings} />}
+      {showTeam && settings && <TeamModal settings={settings} onClose={() => setShowTeam(false)} onSaved={setSettings} />}
       {showModels && <ModelsModal onClose={() => setShowModels(false)} />}
       {methods && methodsArea !== undefined && (
         <MethodsModal

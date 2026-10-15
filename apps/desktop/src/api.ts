@@ -115,9 +115,42 @@ export interface UserSettings {
     max_context?: number;
   };
   llamacpp?: { variant: "cpu" | "vulkan" | "cuda"; ctx_size: number };
+  /** The agent team the lead may delegate parts of a request to. */
+  team?: TeamConfig;
   api_keys?: Record<string, boolean>;
   active_is_local?: boolean;
   forced_local_only?: boolean;
+}
+
+/** A member of the agent team: a specialist econometrician with its own behaviour, skills and model. */
+export interface TeamAgent {
+  /** Stable id (letters, digits, "-" and "_"): the member signs its calls in the journal as ``agent:<id>``. */
+  id: string;
+  name: string;
+  emoji: string;
+  behavior: string;
+  /** Skills (by name) the member may load. */
+  skills: string[];
+  namespaces?: string[] | null;
+  /** Model profile (by name); null = the active one. */
+  profile: string | null;
+  enabled: boolean;
+}
+
+export interface TeamConfig {
+  enabled: boolean;
+  agents: TeamAgent[];
+}
+
+/** Members of a team at most, the default one included. */
+export const MAX_TEAM = 10;
+/** The default member: the lead econometrician, always present and first. */
+export const LEAD_ID = "lead";
+
+/** A method guide an agent can load. */
+export interface SkillInfo {
+  name: string;
+  description: string;
 }
 
 export interface LlmUsage {
@@ -173,8 +206,13 @@ export interface NextStep {
   objects: string[];
 }
 
-export type ChatEvent =
+/** A team member's work in a turn: tagged with ``agent``, its events build its own workspace, not the lead's. */
+export type ChatEvent = (
   | { type: "turn"; turn_id: string; after_block?: string | null }
+  /** The lead hands a task to a member of its team; its events follow, tagged with its id. */
+  | { type: "agent_spawn"; agent: string; name: string; emoji: string; task: string }
+  /** The member is done; ``content`` is its conclusions. */
+  | { type: "agent_done"; agent: string; ok: boolean; content: string }
   | { type: "next_steps"; items: NextStep[] }
   | { type: "plan"; steps: PlanStep[] }
   | ({ type: "scratch" } & Scratch)
@@ -192,7 +230,8 @@ export type ChatEvent =
   | ({ type: "compacted"; before: number } & ContextUsage)
   /** Reporting mode: the ReportingAgent is rewriting the conversation's report after the turn. */
   | { type: "reporting"; status: "running" | "done" | "error"; version?: number; message?: string }
-  | { type: "done" };
+  | { type: "done" }
+) & { agent?: string };
 
 /** The conversation's report, written by the ReportingAgent (paper-style: sections that cite objects by name). */
 export interface ReportObjectRef {
@@ -244,6 +283,22 @@ export interface ChatTurn {
   after_block?: string | null;
   /** The conversation was compacted when this question arrived. */
   compacted?: boolean;
+  /** What each team member did in the turn, in order. */
+  agents?: AgentRecord[];
+}
+
+/** A team member's work in a saved turn: its task, conclusions (``content``) and workspace. */
+export interface AgentRecord {
+  id: string;
+  name: string;
+  emoji?: string;
+  task: string;
+  ok?: boolean;
+  content?: string;
+  cells?: CellInfo[];
+  plan?: PlanStep[];
+  scratch?: Scratch;
+  intro?: string;
 }
 
 export interface CodeIssue {
@@ -328,7 +383,7 @@ export function engine() {
 
 // Notebooks (E8·04): everything a notebook holds (datasets, panel, chat, code, objects, journal) is reached as
 // /notebooks/<id>/<route>; what belongs to the app (health, settings, models, notebooks themselves) is not prefixed.
-const GLOBAL_ROUTE = /^\/(health|settings|models|llm|localai|system|notebooks)(?=[/?]|$)/;
+const GLOBAL_ROUTE = /^\/(health|settings|skills|models|llm|localai|system|notebooks)(?=[/?]|$)/;
 // A notebook holds several conversations on the same data: the chat and the panel of one are reached as
 // /notebooks/<id>/threads/<tid>/<route> (the data routes ignore the conversation).
 const THREADS_ROUTE = /^\/threads(?=[/?]|$)/;
@@ -443,6 +498,7 @@ export const api = {
   clear: () => request<PanelSnapshot>("/panel/clear", { method: "POST" }),
   settings: () => request<UserSettings>("/settings"),
   saveSettings: (s: UserSettings) => request<UserSettings>("/settings", { method: "PUT", body: JSON.stringify(s) }),
+  skills: () => request<SkillInfo[]>("/skills"),
   setApiKey: (provider: string, key: string | null) => request("/settings/api-key", json({ provider, key })),
   localModels: () => request<Record<string, string[]>>("/models/local"),
   llmUsage: () => request<LlmUsage>("/llm/usage"),

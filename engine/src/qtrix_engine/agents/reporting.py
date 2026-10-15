@@ -30,6 +30,9 @@ report, improved: rewrite and reorganise, do not just append.
 - Use only numbers that appear in the turns or in the objects' readings; never invent figures. Say plainly what a
   failed or missing step means for the conclusions.
 - `body_md` is Markdown (it may use **bold**, lists and LaTeX between $ ... $).
+- A turn may come with the work of a team of specialists (under "Team"). The report is the conclusion of the whole
+  analysis: integrate their results where they belong, credit each specialist by name, and state plainly where they
+  disagree and which reading the evidence favours.
 """
 
 
@@ -78,11 +81,19 @@ def turns_of(transcript: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
 def object_names(turns: Sequence[dict[str, Any]]) -> list[str]:
     names: list[str] = []
     for t in turns:
-        for c in t.get("cells") or []:
+        for c in [*(t.get("cells") or []), *(c for a in t.get("agents") or [] for c in a.get("cells") or [])]:
             n = c.get("object")
             if n and n not in names:
                 names.append(n)
     return names
+
+
+def _work(parts: list[str], work: dict[str, Any]) -> None:
+    for note in (work.get("scratch") or {}).get("notes", []):
+        parts.append(f"- [{note.get('section')}] {note.get('text')}")
+    for c in work.get("cells") or []:
+        if c.get("finding"):
+            parts.append(f"- {c.get('name')}{' → ' + c['object'] if c.get('object') else ''}: {c['finding']}")
 
 
 def reading(name: str) -> dict[str, Any] | None:
@@ -101,11 +112,11 @@ def reporter_prompt(previous: ConversationReport | None, turns: Sequence[dict[st
     parts = ["## Report so far", previous.model_dump_json(indent=1) if previous else "(none yet)", "", "## New turns"]
     for t in turns:
         parts += [f"### Question: {t.get('question', '')}", f"Answer: {_clip(str(t.get('content') or ''), 2500)}"]
-        for note in (t.get("scratch") or {}).get("notes", []):
-            parts.append(f"- [{note.get('section')}] {note.get('text')}")
-        for c in t.get("cells") or []:
-            if c.get("finding"):
-                parts.append(f"- {c.get('name')}{' → ' + c['object'] if c.get('object') else ''}: {c['finding']}")
+        _work(parts, t)
+        for a in t.get("agents") or []:
+            parts += [f"#### Team: {a.get('name', a.get('id'))} — task: {a.get('task', '')}",
+                      f"Conclusions: {_clip(str(a.get('content') or '(failed)'), 2000)}"]
+            _work(parts, a)
         parts.append("")
     parts.append("## Objects")
     for name, info in objects.items():

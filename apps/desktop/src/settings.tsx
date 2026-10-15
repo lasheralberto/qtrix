@@ -195,6 +195,17 @@ export function SettingsModal({ onClose, onSaved }: { onClose(): void; onSaved(s
             <p className="muted small">
               {T("settings.dataNote")}
             </p>
+            <label className="row">
+              <input
+                type="checkbox"
+                checked={s.agent.allow_code ?? false}
+                onChange={(e) => update({ agent: { ...s.agent, allow_code: e.target.checked } })}
+              />
+              {T("settings.autoExec")}
+            </label>
+            <p className="muted small">
+              {T("settings.autoExecNote")}
+            </p>
           </section>
 
           <StatusSection s={s} />
@@ -225,48 +236,6 @@ export function SettingsModal({ onClose, onSaved }: { onClose(): void; onSaved(s
           </section>
 
           <UsageSection />
-
-          <section>
-            <h3>{T("settings.superAgent")}</h3>
-            <label className="col">
-              {T("settings.extraInstructions")}
-              <textarea
-                rows={3}
-                value={s.agent.instructions_extra}
-                onChange={(e) => update({ agent: { ...s.agent, instructions_extra: e.target.value } })}
-                placeholder={T("settings.extraInstructionsPlaceholder")}
-              />
-            </label>
-            <label className="row">
-              {T("settings.maxToolCalls")}
-              <input
-                type="number"
-                min={1}
-                max={200}
-                value={s.agent.max_tool_calls}
-                onChange={(e) => update({ agent: { ...s.agent, max_tool_calls: Number(e.target.value) } })}
-              />
-            </label>
-            <label className="row">
-              <input
-                type="checkbox"
-                checked={s.agent.planner ?? true}
-                onChange={(e) => update({ agent: { ...s.agent, planner: e.target.checked } })}
-              />
-              {T("settings.planner")}
-            </label>
-            <label className="row">
-              <input
-                type="checkbox"
-                checked={s.agent.allow_code ?? false}
-                onChange={(e) => update({ agent: { ...s.agent, allow_code: e.target.checked } })}
-              />
-              {T("settings.autoExec")}
-            </label>
-            <p className="muted small">
-              {T("settings.autoExecNote")}
-            </p>
-          </section>
 
           <section>
             <h3>{T("settings.contextTitle")}</h3>

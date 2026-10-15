@@ -19,11 +19,14 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
+from pydantic_ai import Agent
 
 from . import __version__
 from .agents.autocompact import context_window
-from .agents.lead import ChatSession, build_lead_agent, reporter_of
+from .agents.lead import ChatSession, TeamMember, build_lead_agent, build_team_agent, reporter_of
+from .agents.planner import roster_text
 from .agents.reporting import ConversationReport, turns_of, update_report
+from .agents.skills import list_skills
 from .config import LAYOUT, Settings, bootstrap_dir, resolve_home
 from .context import (
     DEFAULT_THREAD_TITLE,
@@ -43,6 +46,7 @@ from .llm.providers import (
     ModelProfile,
     ProviderBlocked,
     SettingsStore,
+    TeamAgentConfig,
     UserSettings,
     build_model,
     detect_local_models,
@@ -244,6 +248,8 @@ class Engine:
                                   runtime_url=lambda: self.runtime_url)
         if model_override is None:
             self.gateway.warm_up()
+        #: The team members' agents by id, with the warning of a member that fell back to the active model.
+        self._team_agents: dict[str, tuple[Agent, str | None]] = {}
         self._agent = None
         self._stopping = threading.Event()
         threading.Thread(target=self._sweep_loop, name="qtrix-kernel-sweeper", daemon=True).start()
@@ -549,19 +555,73 @@ class Engine:
         memory = self.ctx.memory
         return memory.recall(query, k=6) if memory is not None else ""
 
+    @property
+    def _agent(self) -> Agent | None:
+        return self._lead
+
+    @_agent.setter
+    def _agent(self, agent: Agent | None) -> None:
+        # Whatever drops the lead (new settings, key, runtime) drops the team built with it.
+        self._lead = agent
+        if agent is None:
+            self._team_agents.clear()
+
     def agent(self):
         if self._agent is None:
             profile = self.user.active()
+            lead = self.user.team.lead()
             model = self.model_override or build_model(profile, gateway=self.gateway, local_only=self.user.local_only)
             self._agent = build_lead_agent(
                 model,
-                namespaces=self.user.agent.namespaces,
-                instructions_extra=self.user.agent.instructions_extra,
+                namespaces=lead.namespaces if lead.namespaces is not None else self.user.agent.namespaces,
+                instructions_extra=lead.behavior,
+                skills=lead.skills,
                 memory_lookup=self.recall,
                 # Small local models have a short context: send tool schemas on demand.
                 compact=self.model_override is None and profile.provider in ("llamacpp", "ollama", "lmstudio"),
+                roster=roster_text(self.user.team.active()),
             )
         return self._agent
+
+    def _member_model(self, cfg: TeamAgentConfig) -> tuple[Any, ModelProfile, str | None]:
+        """The model a member runs on: its own profile when it can be used, else the active one (with a warning)."""
+        active = self.user.active()
+        if self.model_override is not None:
+            return self.model_override, active, None
+        profile, warning = active, None
+        if cfg.profile and cfg.profile != active.name:
+            chosen = next((p for p in self.user.profiles if p.name == cfg.profile), None)
+            if chosen is None:
+                warning = f"{cfg.name}: el modelo «{cfg.profile}» ya no existe; usa el modelo activo"
+            elif chosen.provider == "llamacpp":  # llama.cpp serves one model at a time: the active one
+                warning = f"{cfg.name}: llama.cpp sirve un solo modelo a la vez; usa el modelo activo"
+            else:
+                profile = chosen
+        try:
+            return build_model(profile, gateway=self.gateway, local_only=self.user.local_only), profile, warning
+        except (ProviderBlocked, ValueError) as exc:
+            if profile is active:
+                raise
+            warning = f"{cfg.name}: {exc}; usa el modelo activo"
+            return build_model(active, gateway=self.gateway, local_only=self.user.local_only), active, warning
+
+    def team(self) -> tuple[list[TeamMember], list[str]]:
+        """The members the lead may delegate to this turn (none while the team is off) and the warnings of those
+        that cannot run on their own model."""
+        members, warnings = [], []
+        for cfg in self.user.team.active():
+            if cfg.id not in self._team_agents:
+                model, profile, warning = self._member_model(cfg)
+                agent = build_team_agent(model, member_id=cfg.id, name=cfg.name, behavior=cfg.behavior,
+                                         skills=cfg.skills, namespaces=cfg.namespaces, memory_lookup=self.recall,
+                                         compact=self.model_override is None
+                                         and profile.provider in ("llamacpp", "ollama", "lmstudio"))
+                self._team_agents[cfg.id] = (agent, warning)
+            agent, warning = self._team_agents[cfg.id]
+            members.append(TeamMember(cfg.id, cfg.name, agent, cfg.emoji))
+            if warning:
+                warnings.append(warning)
+        return members, warnings
 
     def context_window(self) -> int:
         return context_window(self.user.active(), self.user)
@@ -1353,6 +1413,11 @@ def create_app(settings: Settings | None = None, *, model_override: Any = None, 
         engine.update_settings(new)
         return await get_settings()
 
+    @app.get("/skills")
+    async def skills() -> list[dict[str, str]]:
+        """The skills a team member can be given (name and description)."""
+        return list_skills()
+
     @app.post("/settings/api-key")
     async def put_api_key(req: ApiKeyRequest) -> dict[str, bool]:
         set_api_key(req.provider, req.key)
@@ -1599,19 +1664,28 @@ def create_app(settings: Settings | None = None, *, model_override: Any = None, 
                         yield _sse({"type": "status", "message": f"Cargando {name} en llama.cpp…"})
                     await engine.prepare_model()
                     agent = engine.agent()
+                    team, warnings = engine.team()
+                    for warning in warnings:
+                        yield _sse({"type": "status", "message": warning})
+                    team_worked = False
                     async for event in engine.chat.stream(agent, req.message,
                                                           max_tool_calls=engine.user.agent.max_tool_calls,
                                                           plan=engine.user.agent.planner,
                                                           context_window=engine.context_window()
                                                           if engine.user.agent.auto_compact else None,
                                                           compact_at=engine.user.agent.compact_at,
-                                                          approved_plan=req.plan or ""):
-                        if event["type"] == "text":
+                                                          approved_plan=req.plan or "", team=team):
+                        if event["type"] == "agent_spawn":
+                            team_worked = True
+                        elif "agent" in event:  # a member's work: the turn's answer and memory are the lead's
+                            pass
+                        elif event["type"] == "text":
                             answer.append(event["delta"])
                         elif event["type"] == "tool_call":
                             tool_log.append(f"{event['name']}({json.dumps(event['args'], default=str)[:300]})")
                         yield _sse(event)
-                    if thread.reporting:
+                    # The team's conclusion is the conversation's report: a team turn always brings it up to date.
+                    if thread.reporting or team_worked:
                         async for ev in engine.reporting_events(thread, full=thread.report is None):
                             yield _sse(ev)
                 except Exception as exc:  # noqa: BLE001 - stream the failure to the UI instead of dropping

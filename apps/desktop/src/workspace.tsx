@@ -21,16 +21,16 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { Fragment, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import type { CellInfo, PlanStep } from "./api";
 import { Markdown } from "./blocks";
-import type { NextStepsApi, Turn } from "./chat";
+import type { AgentWork, NextStepsApi, Turn, Work } from "./chat";
 import { T } from "./i18n";
 import { PlanPanel, type PlanDraft } from "./plan";
 
 type Phase = "running" | "done" | "issues" | "error" | "idle";
 
-function phaseOf(turn: Turn): Phase {
+function phaseOf(turn: Work): Phase {
   if (turn.running) return "running";
   if (turn.error) return "error";
   if (turn.scratch?.notes.some((n) => n.section === "issue")) return "issues";
@@ -46,7 +46,7 @@ const PHASE_LABEL: Record<Phase, string> = {
 };
 
 /** The index of the step in progress: the first pending one while the agent works. */
-function currentStep(turn: Turn): number {
+function currentStep(turn: Work): number {
   return turn.running ? (turn.plan ?? []).findIndex((s) => s.status === "pending") : -1;
 }
 
@@ -194,14 +194,39 @@ export function Workspace(props: {
     onReject(): void;
     onRetry(): void;
   } | null;
+  /** The team's default member (the lead), whose tab carries its name. */
+  lead?: { name: string; emoji: string };
 }) {
   const { turns, open, onClose, plan } = props;
   const index = props.turnKey ? turns.findIndex((t) => t.key === props.turnKey) : turns.length - 1;
   const at = index < 0 ? turns.length - 1 : index;
   const turn = turns[at];
-  const [tab, setTab] = useState<"plan" | "work">("work");
+  // "plan", "work" (the lead alone), or, once the team has worked: "lead" and each member's id.
+  const [tab, setTab] = useState("work");
   const [full, setFull] = useState(false);
-  const showPlan = !!plan && tab === "plan";
+  // Each member's tab accumulates its work and conclusions over every turn up to the one shown.
+  const merged = useMemo(() => mergeAgents(turns.slice(0, at + 1)), [turns, at]);
+  const team = merged.length ? merged : null;
+  const workTabs = team ? ["lead", ...team.map((a) => a.id)] : ["work"];
+  const tabs = plan ? ["plan", ...workTabs] : workTabs;
+  // A tab of another turn (a member that did not work in this one) falls back to the turn's first tab.
+  const active = tabs.includes(tab) ? tab : workTabs[0];
+  const showPlan = !!plan && active === "plan";
+  const member = team?.find((a) => a.id === active);
+  const shown: Work | undefined = member ?? turn;
+
+  const tabLabel = (id: string): ReactNode => {
+    if (id === "plan") return T("plan.tabPlan");
+    if (id === "work") return T("plan.tabWork");
+    if (id === "lead") return props.lead ? `${props.lead.emoji} ${props.lead.name}`.trim() : T("team.leadTab");
+    const a = team!.find((m) => m.id === id)!;
+    return (
+      <>
+        {a.running ? <LoaderCircle size={11} className="spin" /> : a.emoji && <span aria-hidden>{a.emoji}</span>}
+        {a.name}
+      </>
+    );
+  };
 
   // A new plan opens its tab; without a plan there is only the agent's work.
   const planKey = plan ? plan.draft.request : null;
@@ -249,21 +274,29 @@ export function Workspace(props: {
             <X size={15} />
           </button>
         </div>
-        {plan && (
-          <div className="ws-tabs" role="tablist">
-            {(["plan", "work"] as const).map((id) => (
-              <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>
-                {id === "plan" ? T("plan.tabPlan") : T("plan.tabWork")}
+        {tabs.length > 1 && (
+          <div className={`ws-tabs ${tabs.length > 2 ? "many" : ""}`} role="tablist">
+            {tabs.map((id) => (
+              <button
+                key={id}
+                role="tab"
+                aria-selected={active === id}
+                className={active === id ? "on" : ""}
+                title={team?.find((a) => a.id === id)?.task}
+                onClick={() => setTab(id)}
+              >
+                {tabLabel(id)}
               </button>
             ))}
           </div>
         )}
-        {!showPlan && turn && (
+        {!showPlan && turn && shown && (
           <>
-            <p className="ws-question" title={turn.question}>
-              {turn.question}
+            <p className="ws-question" title={member ? member.task : turn.question}>
+              {member && <span className="ws-label">{T("team.task")}</span>}
+              {member ? member.task : turn.question}
             </p>
-            <Status turn={turn} />
+            <Status turn={shown} />
           </>
         )}
       </header>
@@ -281,8 +314,13 @@ export function Workspace(props: {
           />
         ) : (
           <>
-            {props.steps && <NextSteps steps={props.steps} onOpenObject={props.onOpenObject} />}
-            {turn ? <TurnWork key={turn.key} turn={turn} onOpenObject={props.onOpenObject} /> : <EmptyWorkspace />}
+            {props.steps && !member && <NextSteps steps={props.steps} onOpenObject={props.onOpenObject} />}
+            {member && <MemberConclusions agent={member} />}
+            {turn && shown ? (
+              <TurnWork key={`${turn.key}/${active}`} turn={shown} onOpenObject={props.onOpenObject} />
+            ) : (
+              <EmptyWorkspace />
+            )}
           </>
         )}
       </div>
@@ -290,7 +328,55 @@ export function Workspace(props: {
   );
 }
 
-function Status({ turn }: { turn: Turn }) {
+/** A member's conclusions so far: one stretch per turn it worked in, headed by the question of that turn. */
+function MemberConclusions({ agent: a }: { agent: AgentWork }) {
+  const text = a.text || (a.ok === false ? T("team.memberFailed") : T("team.noConclusions"));
+  return (
+    <div className={`ws-card ${a.ok === false ? "issue" : "conclusion"}`}>
+      <span className="ws-label">{T("team.conclusionsSoFar")}</span>
+      {a.running ? (
+        <p className="ws-now">
+          <LoaderCircle size={12} className="spin" /> {a.status ?? T("workspace.thinking")}
+        </p>
+      ) : (
+        <Markdown text={text} />
+      )}
+    </div>
+  );
+}
+
+/** The team as the turns up to the one shown leave it: each member once, in order of first appearance, with the
+ * work of every turn it took part in folded into one — cells and notes appended, the latest plan and task, and its
+ * conclusions joined turn by turn under the question that asked for them. */
+function mergeAgents(turns: Turn[]): AgentWork[] {
+  const out = new Map<string, AgentWork>();
+  for (const t of turns) {
+    for (const a of t.agents ?? []) {
+      // Cell ids are unique within a turn only: prefix them so the merged timeline keeps them apart.
+      const tools = a.tools.map((c) => ({ ...c, id: `${t.key}:${c.id}` }));
+      const stretch = a.text ? `**${t.question}**\n\n${a.text}` : "";
+      const prev = out.get(a.id);
+      if (!prev) {
+        out.set(a.id, { ...a, tools, text: stretch });
+        continue;
+      }
+      out.set(a.id, {
+        ...a,
+        tools: [...prev.tools, ...tools],
+        text: [prev.text, stretch].filter(Boolean).join("\n\n---\n\n"),
+        plan: a.plan ?? prev.plan,
+        intro: a.intro ?? prev.intro,
+        scratch:
+          a.scratch || prev.scratch
+            ? { goal: a.scratch?.goal || prev.scratch?.goal || "", notes: [...(prev.scratch?.notes ?? []), ...(a.scratch?.notes ?? [])] }
+            : undefined,
+      });
+    }
+  }
+  return [...out.values()];
+}
+
+function Status({ turn }: { turn: Work }) {
   const phase = phaseOf(turn);
   const steps = turn.plan ?? [];
   const settled = steps.filter((s) => s.status !== "pending").length;
@@ -324,7 +410,7 @@ function EmptyWorkspace() {
   );
 }
 
-function TurnWork({ turn, onOpenObject }: { turn: Turn; onOpenObject(name: string, blockId?: string | null): void }) {
+function TurnWork({ turn, onOpenObject }: { turn: Work; onOpenObject(name: string, blockId?: string | null): void }) {
   const steps = turn.plan ?? [];
   const current = currentStep(turn);
   const notes = turn.scratch?.notes ?? [];
