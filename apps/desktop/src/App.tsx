@@ -30,6 +30,7 @@ import { ReportDocument, ReportingToggle, useReporting } from "./reporting";
 import { SettingsModal } from "./settings";
 import { ThreadList } from "./threads";
 import { Workspace } from "./workspace";
+import { ModeSelect, usePlan, type Mode } from "./plan";
 
 function applyPanelEvent(blocks: Block[], ev: PanelEvent): Block[] {
   switch (ev.op) {
@@ -78,6 +79,8 @@ export default function App() {
   // The agent's workspace: open while it works (the user may close it), on the latest turn unless one was picked.
   const [wsOpen, setWsOpen] = useState(false);
   const [wsTurn, setWsTurn] = useState<string | null>(null);
+  // Ask runs the request now; Plan drafts a plan for the user to approve first.
+  const [mode, setMode] = useState<Mode>("ask");
   const [draft, setDraft] = useState<Draft | null>(null);
   // The rail floats like the workspace and can be put away; it always starts open.
   const [railOpen, setRailOpen] = useState(true);
@@ -97,6 +100,7 @@ export default function App() {
     conversation,
     (ev) => reportingEvent.current(ev),
   );
+  const plans = usePlan(conversation);
   const activeRef = useRef<string | null>(null);
   activeRef.current = activeId;
   const active = notebooks.find((n) => n.id === activeId) ?? null;
@@ -350,12 +354,32 @@ export default function App() {
     setWsOpen(true);
   };
 
-  const ask = (text: string) => {
+  /** Run a request now; ``plan`` is the plan the user approved for it. */
+  const ask = (text: string, plan?: string) => {
     stick.current = true;
     setWsTurn(null);
     setWsOpen(true);
     if (turns.length === 0) nameFrom(text);
-    return send(text);
+    return send(text, plan);
+  };
+
+  // What the composer sends: in Plan mode a plan is drafted in the workspace instead of running the request.
+  const submit = (text: string) => {
+    if (mode === "ask") return ask(text);
+    setWsOpen(true);
+    return plans.draft(text);
+  };
+  // Approving injects the (possibly edited) plan into the normal flow; rejecting gives the request back to the composer.
+  const approvePlan = () => {
+    const p = plans.plan;
+    if (!p || p.status !== "ready" || busy) return;
+    plans.discard();
+    ask(p.request, p.text);
+  };
+  const rejectPlan = () => {
+    const p = plans.plan;
+    plans.discard();
+    if (p) composer.current?.focus(p.request);
   };
 
   const flash = (id: string) => {
@@ -522,7 +546,7 @@ export default function App() {
               <p>{T("app.emptyBody")}</p>
               <div className="suggestions">
                 {SUGGESTIONS.map((s) => (
-                  <button key={s} className="suggestion" onClick={() => ask(s)}>
+                  <button key={s} className="suggestion" onClick={() => submit(s)}>
                     {s}
                   </button>
                 ))}
@@ -536,10 +560,12 @@ export default function App() {
           ref={composer}
           methods={methods}
           datasets={datasets}
-          busy={busy}
-          onSend={ask}
-          onStop={stop}
+          busy={busy || plans.drafting}
+          onSend={submit}
+          onStop={() => (plans.drafting ? plans.discard() : stop())}
           onReset={reset}
+          placeholder={mode === "plan" ? T("plan.placeholder") : undefined}
+          modeSelect={<ModeSelect mode={mode} onChange={setMode} />}
           modelPicker={
             <ModelPicker
               settings={settings}
@@ -566,6 +592,16 @@ export default function App() {
         onSelect={setWsTurn}
         onClose={closeWorkspace}
         onOpenObject={openObject}
+        plan={
+          plans.plan && {
+            draft: plans.plan,
+            busy,
+            onEdit: plans.edit,
+            onApprove: approvePlan,
+            onReject: rejectPlan,
+            onRetry: () => plans.plan && plans.draft(plans.plan.request),
+          }
+        }
       />
 
       {reportOpen && reporting.enabled && (

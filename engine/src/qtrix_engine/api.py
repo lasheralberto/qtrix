@@ -176,6 +176,12 @@ class ReorderRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    #: A plan the user approved in plan mode (Markdown): the turn follows it.
+    plan: str | None = None
+
+
+class PlanRequest(BaseModel):
+    message: str
 
 
 class ApiKeyRequest(BaseModel):
@@ -1522,6 +1528,25 @@ def create_app(settings: Settings | None = None, *, model_override: Any = None, 
             await engine.chat.compact(engine.agent(), engine.context_window())
         return await chat_context()
 
+    @app.post("/chat/plan")
+    async def chat_plan(req: PlanRequest) -> dict[str, str]:
+        """Plan mode: draft the detailed plan of a request for the user to review. Nothing runs and the conversation
+        is not touched; the approved plan comes back with the request through ``POST /chat``."""
+        try:
+            engine.validate_model()
+        except (ProviderBlocked, ValueError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+        async with engine._chat_lock:
+            try:
+                await engine.prepare_model()
+                plan = await engine.chat.draft_plan(engine.agent(), req.message)
+            except Exception as exc:  # noqa: BLE001 - tell the UI why there is no plan
+                log.exception("Plan drafting failed")
+                raise HTTPException(502, f"{type(exc).__name__}: {exc}") from exc
+        if not plan:
+            raise HTTPException(502, "The model returned an empty plan.")
+        return {"plan": plan}
+
     @app.post("/chat")
     async def chat(req: ChatRequest) -> StreamingResponse:
         try:
@@ -1548,7 +1573,8 @@ def create_app(settings: Settings | None = None, *, model_override: Any = None, 
                                                           plan=engine.user.agent.planner,
                                                           context_window=engine.context_window()
                                                           if engine.user.agent.auto_compact else None,
-                                                          compact_at=engine.user.agent.compact_at):
+                                                          compact_at=engine.user.agent.compact_at,
+                                                          approved_plan=req.plan or ""):
                         if event["type"] == "text":
                             answer.append(event["delta"])
                         elif event["type"] == "tool_call":

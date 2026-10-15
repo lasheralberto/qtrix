@@ -7,10 +7,10 @@ import json
 import re
 
 from fastapi.testclient import TestClient
-from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
+from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolCallPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 
-from qtrix_engine.agents.planner import Plan, resumable
+from qtrix_engine.agents.planner import Plan, leaked_call, leaked_note, resumable
 from qtrix_engine.api import create_app
 from qtrix_engine.config import Settings
 
@@ -245,3 +245,78 @@ def test_ask_user_ends_the_turn_and_blocks_further_tools(tmp_path, wages_csv):
     assert not any(e["type"] == "status" and "Continuando" in e["message"] for e in evs)  # pending steps: no loop
     assert text(evs).strip() == "¿Qué población te interesa?"
     assert not [e for e in c.app.state.engine.ctx.journal.list() if e["actor"].startswith("agent")]
+
+
+PLAN_MD = "## Objetivo\nEstimar el retorno a la educación\n\n## Pasos\n1. OLS"
+
+
+def drafting(seen: list[str], plan_md: str = PLAN_MD) -> FunctionModel:
+    """The plan drafter (plain text) writes ``plan_md``; the planner (an output tool) sees nothing to do; every
+    prompt received is appended to ``seen``."""
+
+    def respond(messages, info: AgentInfo):
+        seen.append(last_prompt(messages))
+        if info.output_tools:
+            return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {"steps": []})])
+        return ModelResponse(parts=[TextPart(plan_md)])
+
+    async def talk(messages, info: AgentInfo):
+        yield "Hecho."
+
+    return FunctionModel(respond, stream_function=talk)
+
+
+def test_plan_mode_drafts_a_plan_and_runs_nothing(tmp_path, wages_csv):
+    seen: list[str] = []
+    c = client(tmp_path, wages_csv, drafting(seen))
+    r = c.post("/chat/plan", json={"message": "estima el retorno a la educación"})
+    assert r.status_code == 200 and "## Objetivo" in r.json()["plan"]
+    assert "estima el retorno a la educación" in seen[0]
+    # The conversation is untouched and the agent did nothing: the plan waits for the user's approval.
+    assert c.get("/chat/history").json() == []
+    assert not [e for e in c.app.state.engine.ctx.journal.list() if e["actor"].startswith("agent")]
+
+
+def test_an_approved_plan_goes_with_the_request_but_not_into_the_transcript(tmp_path, wages_csv):
+    seen: list[str] = []
+    c = client(tmp_path, wages_csv, drafting(seen))
+    plan = "1. Estimar OLS de lwage sobre educ con HC1"
+    evs = events(c.post("/chat", json={"message": "estima el retorno", "plan": plan}))
+    assert evs[-1]["type"] == "done"
+    planner_prompt = seen[0]
+    assert "Plan approved by the user" in planner_prompt and plan in planner_prompt
+    assert c.get("/chat/history").json()[0]["content"] == "estima el retorno"  # the question stays short
+
+
+def test_without_an_approved_plan_the_request_is_unchanged(tmp_path, wages_csv):
+    seen: list[str] = []
+    c = client(tmp_path, wages_csv, drafting(seen))
+    events(c.post("/chat", json={"message": "hola"}))
+    assert "Plan approved by the user" not in seen[0]
+
+
+LEAK = "scratch_note{section:conclusion,text:El modelo explica un 54.4% de la varianza salarial.}"
+
+
+def test_a_tool_call_written_as_text_is_not_the_answer():
+    name, body = leaked_call(LEAK)
+    assert name == "scratch_note" and body.startswith("section:conclusion,text:")
+    assert leaked_note(body) == "El modelo explica un 54.4% de la varianza salarial."
+    assert leaked_call("scratch_note es una herramienta {pero esto es prosa}") is None
+    assert leaked_call("variable_inventada{a:1}") is None
+
+
+def test_a_final_answer_that_is_a_leaked_note_becomes_the_note_text(tmp_path, wages_csv):
+    c = client(tmp_path, wages_csv, scripted([], [LEAK]))
+    evs = events(c.post("/chat", json={"message": "hey"}))
+    assert any(e["type"] == "finding" and e["strip"] == len(LEAK) and not e["text"] for e in evs)  # raw text removed
+    answer = c.get("/chat/history").json()[-1]
+    assert answer["content"].strip() == "El modelo explica un 54.4% de la varianza salarial."
+    assert {"section": "conclusion", "text": answer["content"].strip()} in answer["scratch"]["notes"]
+
+
+def test_a_leaked_call_of_another_tool_gives_the_fallback_answer(tmp_path, wages_csv):
+    c = client(tmp_path, wages_csv, scripted([], ['data_list_datasets{}']))
+    evs = events(c.post("/chat", json={"message": "hey"}))
+    assert "data_list_datasets{" not in c.get("/chat/history").json()[-1]["content"]
+    assert evs[-1]["type"] == "done"

@@ -25,6 +25,7 @@ import type { CellInfo, PlanStep } from "./api";
 import { Markdown } from "./blocks";
 import type { Turn } from "./chat";
 import { T } from "./i18n";
+import { PlanPanel, type PlanDraft } from "./plan";
 
 type Phase = "running" | "done" | "issues" | "error" | "idle";
 
@@ -100,39 +101,81 @@ export function Workspace(props: {
   onSelect(key: string | null): void;
   onClose(): void;
   onOpenObject(name: string, blockId?: string | null): void;
+  /** Plan mode: the plan waiting for the user's decision; it gets a space of its own beside the agent's work. */
+  plan?: {
+    draft: PlanDraft;
+    /** The agent is working on another turn: the plan can wait but not start yet. */
+    busy?: boolean;
+    onEdit(text: string): void;
+    onApprove(): void;
+    onReject(): void;
+    onRetry(): void;
+  } | null;
 }) {
-  const { turns, open, onClose } = props;
+  const { turns, open, onClose, plan } = props;
   const index = props.turnKey ? turns.findIndex((t) => t.key === props.turnKey) : turns.length - 1;
   const at = index < 0 ? turns.length - 1 : index;
   const turn = turns[at];
+  const [tab, setTab] = useState<"plan" | "work">("work");
+  const [full, setFull] = useState(false);
+  const showPlan = !!plan && tab === "plan";
+
+  // A new plan opens its tab; without a plan there is only the agent's work.
+  const planKey = plan ? plan.draft.request : null;
+  useEffect(() => {
+    setTab(planKey ? "plan" : "work");
+    if (!planKey) setFull(false);
+  }, [planKey]);
+  useEffect(() => {
+    if (!open) setFull(false);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    // Escape leaves full screen first, then closes the workspace.
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && (full ? setFull(false) : onClose());
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, onClose, full]);
 
   const go = (i: number) => props.onSelect(i >= turns.length - 1 ? null : turns[i].key);
 
   return (
-    <aside className={`workspace ${open ? "open" : ""}`} aria-hidden={!open} inert={!open} aria-label={T("workspace.ariaLabel")}>
+    <aside
+      className={`workspace ${open ? "open" : ""} ${full && showPlan ? "full" : ""}`}
+      aria-hidden={!open}
+      inert={!open}
+      aria-label={T("workspace.ariaLabel")}
+    >
       <header className="ws-head">
         <div className="ws-head-row">
           <span className="ws-title">{T("workspace.title")}</span>
           <span className="spacer" />
-          <button className="ghost" title={T("workspace.prevTurn")} disabled={at <= 0} onClick={() => go(at - 1)}>
-            <ChevronLeft size={15} />
-          </button>
-          <span className="ws-pos muted small">{turns.length ? `${at + 1}/${turns.length}` : "—"}</span>
-          <button className="ghost" title={T("workspace.nextTurn")} disabled={at >= turns.length - 1} onClick={() => go(at + 1)}>
-            <ChevronRight size={15} />
-          </button>
+          {!showPlan && (
+            <>
+              <button className="ghost" title={T("workspace.prevTurn")} disabled={at <= 0} onClick={() => go(at - 1)}>
+                <ChevronLeft size={15} />
+              </button>
+              <span className="ws-pos muted small">{turns.length ? `${at + 1}/${turns.length}` : "—"}</span>
+              <button className="ghost" title={T("workspace.nextTurn")} disabled={at >= turns.length - 1} onClick={() => go(at + 1)}>
+                <ChevronRight size={15} />
+              </button>
+            </>
+          )}
           <button className="ghost" title={T("workspace.close")} onClick={onClose}>
             <X size={15} />
           </button>
         </div>
-        {turn && (
+        {plan && (
+          <div className="ws-tabs" role="tablist">
+            {(["plan", "work"] as const).map((id) => (
+              <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>
+                {id === "plan" ? T("plan.tabPlan") : T("plan.tabWork")}
+              </button>
+            ))}
+          </div>
+        )}
+        {!showPlan && turn && (
           <>
             <p className="ws-question" title={turn.question}>
               {turn.question}
@@ -141,8 +184,23 @@ export function Workspace(props: {
           </>
         )}
       </header>
-      <div className="ws-body">
-        {turn ? <TurnWork key={turn.key} turn={turn} onOpenObject={props.onOpenObject} /> : <EmptyWorkspace />}
+      <div className={`ws-body ${showPlan ? "plan" : ""}`}>
+        {showPlan ? (
+          <PlanPanel
+            plan={plan.draft}
+            busy={plan.busy}
+            fullscreen={full}
+            onToggleFullscreen={() => setFull((f) => !f)}
+            onEdit={plan.onEdit}
+            onApprove={plan.onApprove}
+            onReject={plan.onReject}
+            onRetry={plan.onRetry}
+          />
+        ) : turn ? (
+          <TurnWork key={turn.key} turn={turn} onOpenObject={props.onOpenObject} />
+        ) : (
+          <EmptyWorkspace />
+        )}
       </div>
     </aside>
   );

@@ -235,7 +235,8 @@ export function useChat(
   }
 
   const send = useCallback(
-    async (text: string) => {
+    /** ``plan``: a plan the user approved in plan mode; the turn follows it while the panel shows the bare question. */
+    async (text: string, plan?: string) => {
       const question = text.trim();
       if (!question || busyRef.current) return false;
       busyRef.current = true;
@@ -253,7 +254,7 @@ export function useChat(
       ]);
       abort.current = new AbortController();
       try {
-        for await (const ev of chat(question, abort.current.signal)) handle(ev);
+        for await (const ev of chat(question, abort.current.signal, plan)) handle(ev);
       } catch (err) {
         if ((err as Error).name !== "AbortError")
           patchLast((t) => ({ ...t, error: String(err) }));
@@ -518,13 +519,20 @@ export const Composer = forwardRef<
     onStop(): void;
     onReset(): void;
     modelPicker: ReactNode;
+    /** The Ask / Plan dropdown, shown before the model picker. */
+    modeSelect?: ReactNode;
+    /** Replaces the default placeholder (plan mode describes what happens to the message). */
+    placeholder?: string;
     /** The context meter, shown next to the model picker. */
     meter?: ReactNode;
     /** What the autocomplete suggests while typing: the methods of the catalog and the variables of the datasets. */
     methods: MethodArea[] | null;
     datasets: Dataset[];
   }
->(function Composer({ busy, onSend, onStop, onReset, modelPicker, meter, methods, datasets }, ref) {
+>(function Composer(
+  { busy, onSend, onStop, onReset, modelPicker, modeSelect, placeholder, meter, methods, datasets },
+  ref,
+) {
   const [input, setInput] = useState("");
   // Where the cursor is (null while a range is selected).
   const [caret, setCaret] = useState<number | null>(0);
@@ -602,7 +610,7 @@ export const Composer = forwardRef<
       <textarea
         ref={area}
         value={input}
-        placeholder={T("chat.placeholder")}
+        placeholder={placeholder ?? T("chat.placeholder")}
         role="combobox"
         aria-expanded={open}
         aria-controls="composer-suggest"
@@ -646,6 +654,7 @@ export const Composer = forwardRef<
         rows={2}
       />
       <div className="composer-bar">
+        {modeSelect}
         {modelPicker}
         {meter}
         <span className="spacer" />

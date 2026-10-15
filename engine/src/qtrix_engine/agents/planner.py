@@ -4,6 +4,7 @@ loop going until every step is settled and there is a final answer."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -32,10 +33,51 @@ Rules:
   answer, so ask only what blocks the work and cannot be learnt by inspecting the data shown below; whatever has a
   sensible default, decide it and say so in the plan instead of asking.
 - Start by inspecting data only when the request depends on columns or structure not shown below.
+- When the message carries a plan approved by the user, your steps are that plan's steps in the same order (condensed
+  to at most 8 if it has more), and you never ask questions: the user already settled them.
 - Do not add a step for writing the final answer: the executor always ends with it.
 - When you plan steps, also state the goal in one sentence and, when there is a real choice of method, up to 3
   alternatives you weighed, each as "approach: why chosen or discarded" in a few words. The user sees them in the
   agent's workspace: keep them operational, no long deliberation.
+"""
+
+PLAN_MODE_INSTRUCTIONS = """\
+You are the planning mode of qtrix, a research workbench for applied econometrics. The user wants to review a plan
+BEFORE anything runs, so you only write the plan: you run nothing and you do not answer the request itself.
+The plan is a Markdown document the user will edit and approve; an executor agent with the tools listed below will
+then follow it step by step.
+
+Write everything in the user's language, section headings included (translate the ones below). Use these sections,
+in this order, as `##` headings:
+
+## Goal
+One or two sentences: what the work must establish and how the result will be used.
+
+## Data and assumptions
+Bullets: the datasets and variables you rely on, and every assumption you make. Decide whatever has a sensible
+default and say so here.
+
+## Steps
+One `###` heading per step, numbered and titled with the action: `### 1. Check the data`. 3 to 10 steps. Under each
+heading, exactly these bullets, each starting with a bold label (translated): **Action** (what to do: dataset,
+variables, estimator or test), **Tool** (the registry tool(s) that do it, by exact name), **Check** (the diagnostic
+that tells whether it worked), **Output** (the object, table or decision it produces, named when you can).
+
+## Alternatives considered
+Up to 3 bullets "approach: why chosen or discarded". Omit the section when there is no real choice.
+
+## Risks
+Bullets: a threat to validity and what you will do if it materialises. Omit the section when there are none.
+
+## Open questions
+Only decisions that block the work and the data cannot settle (the outcome, the treatment, the estimand), each with
+the default you would take if the user does not answer. Omit the section when there are none.
+
+Formatting rules:
+- Put every tool name, dataset and variable in `backticks`, and nothing else: the interface shows each tool's help
+  when the user hovers its name. Use only tool names from the list below, spelled exactly.
+- Plain Markdown only: no LaTeX or `$` maths (write R², not a formula), no tables, no bold outside the labels above.
+- Be concrete and operational, not generic. Output only the document, no preface and no closing remarks.
 """
 
 #: Steps the executor may settle; "pending" ones keep the loop going.
@@ -286,6 +328,19 @@ def build_planner(model: Any, *, namespaces: Sequence[str] | None = None) -> Age
                  instructions=PLANNER_INSTRUCTIONS + "\n## Executor tools\n" + tool_catalog(namespaces))
 
 
+def build_plan_drafter(model: Any, *, namespaces: Sequence[str] | None = None) -> Agent[None, str]:
+    """Plan mode: writes the detailed, user-editable plan of a request as Markdown, without running anything."""
+    return Agent(model, name="plan_drafter", retries=2,
+                 instructions=PLAN_MODE_INSTRUCTIONS + "\n## Executor tools\n" + tool_catalog(namespaces))
+
+
+def approved_plan_prompt(plan: str) -> str:
+    """The plan the user approved in plan mode, as it goes with their request into the normal flow."""
+    return ("\n\n[Plan approved by the user for this request. Follow it: its steps are your plan, in order, and "
+            "what it says overrides your own preferences (the user may have edited it). Change it only if results "
+            "show it cannot be carried out, and say so.]\n" + plan.strip())
+
+
 def planner_prompt(message: str, workspace: str, transcript: Sequence[dict[str, Any]], *, turns: int = 3,
                    limit: int = 600) -> str:
     """What the planner sees: the workspace, the end of the conversation and the new message (not the raw model
@@ -316,6 +371,27 @@ def final_prompt(message: str) -> str:
     return ("[Write now your final answer to the user's request, in their language, from the results above. Do not "
             "call tools. Report what was done, the key numbers and their interpretation, and anything left undone "
             "and why.]\nRequest: " + message)
+
+
+_LEAKED_CALL = re.compile(r"\s*(?P<name>[a-z][a-z0-9_]*)\s*\{(?P<body>.*)\}\s*", re.S)
+_LEAKED_TEXT = re.compile(r"""["']?text["']?\s*[:=]\s*["']?(?P<text>.*?)["']?\s*$""", re.S)
+
+
+def leaked_call(text: str) -> tuple[str, str] | None:
+    """A model with its tools off for the final answer sometimes writes a call as text instead
+    (``scratch_note{section:conclusion,text:...}``): the tool's name and the raw arguments, when the whole text is
+    one such call."""
+    m = _LEAKED_CALL.fullmatch(text)
+    if m is None:
+        return None
+    known = {spec.name for spec in all_tools()} | PLAN_TOOLS | SCRATCH_TOOLS | ASK_TOOLS
+    return (m["name"], m["body"]) if m["name"] in known else None
+
+
+def leaked_note(body: str) -> str:
+    """The ``text`` argument of a leaked ``scratch_note`` call, on one line (empty when there is none)."""
+    m = _LEAKED_TEXT.search(body)
+    return " ".join(m["text"].split()) if m else ""
 
 
 def resumable(messages: list[ModelMessage]) -> list[ModelMessage]:

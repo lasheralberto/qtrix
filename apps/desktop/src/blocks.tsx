@@ -3,7 +3,7 @@ import katex from "katex";
 import { Check, Code2, Copy, MessageSquarePlus, Pencil, Pin, PinOff, Snowflake, X } from "lucide-react";
 import Plotly from "plotly.js-dist-min";
 import { useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -253,10 +253,11 @@ function Equation({ data }: { data: Block["data"] }) {
   );
 }
 
-export function Markdown({ text }: { text: string }) {
+/** ``components`` overrides how elements render (the plan turns tool names into hover help). */
+export function Markdown({ text, components }: { text: string; components?: Components }) {
   return (
     <div className="md">
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]} components={components}>
         {text}
       </ReactMarkdown>
     </div>

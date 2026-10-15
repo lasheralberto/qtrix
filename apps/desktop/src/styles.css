@@ -723,3 +723,57 @@ body.report-printing .report-bar, body.report-printing .report-error { display: 
 body.report-printing .report-desk { overflow: visible; padding: 0; }
 body.report-printing .report-page { width: auto; min-height: 0; margin: 0; padding: 0; box-shadow: none; border-radius: 0; }
 @page { size: A4; margin: 18mm 16mm; }
+
+/* Ask / Plan mode dropdown, beside the model picker */
+.mode { position: relative; }
+.mode-trigger { font-size: 12px; padding: 3px 8px 3px 10px; border-radius: 999px; background: transparent; border: 1px solid var(--line-2); color: var(--ink-2); }
+.mode-trigger:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+.mode-trigger.plan { color: var(--accent-strong); }
+.mode-trigger[aria-expanded="true"] { background: var(--accent-softer); border-color: var(--accent); color: var(--accent-strong); }
+.mode-trigger svg:last-child { transition: transform 0.15s; }
+.mode-trigger .rot { transform: rotate(180deg); }
+.mode-pop { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 40; width: 300px; max-width: calc(100vw - 32px); margin: 0; padding: 6px; list-style: none; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.18); }
+.mode-option { width: 100%; align-items: flex-start; text-align: left; border-color: transparent; background: transparent; border-radius: 10px; padding: 8px 10px; gap: 10px; }
+.mode-option:hover:not(:disabled) { background: var(--hover); border-color: transparent; }
+.mode-option.on { background: var(--accent-soft); }
+.mode-option > svg:first-child { margin-top: 2px; color: var(--accent); flex: none; }
+.mode-option-text { display: flex; flex-direction: column; flex: 1; min-width: 0; line-height: 1.4; }
+.mode-option-text span { font-size: 12px; color: var(--ink-3); }
+.mode-check { color: var(--accent); flex: none; margin-top: 3px; }
+
+/* The plan: its own tab in the workspace, expandable to the whole window */
+.ws-tabs { display: flex; gap: 4px; margin: 8px 0 2px; padding: 3px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--line); }
+.ws-tabs button { flex: 1; justify-content: center; border-color: transparent; background: transparent; padding: 4px 8px; font-size: 12px; color: var(--ink-2); }
+.ws-tabs button.on { background: var(--surface); color: var(--accent-strong); font-weight: 600; box-shadow: var(--shadow-sm); }
+.ws-body.plan { padding: 0; gap: 0; overflow: hidden; }
+.workspace.full { z-index: 40; left: var(--ws-gap); width: auto; transform-origin: center; }
+.plan-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.plan-bar { display: flex; align-items: center; gap: 6px; padding: 8px 10px 8px 14px; border-bottom: 1px solid var(--line); color: var(--ink-2); }
+.plan-seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 999px; padding: 2px; gap: 2px; }
+.plan-seg button { border-radius: 999px; padding: 2px 9px; font-size: 12px; }
+.plan-seg button.on { background: var(--accent-soft); color: var(--accent-strong); }
+.plan-scroll { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.plan-panel.full .plan-scroll { padding: 28px max(24px, calc((100% - 820px) / 2)); }
+.plan-request { margin: 0; padding: 8px 10px; border-radius: 10px; background: var(--accent-softer); border: 1px solid var(--accent-soft); font-size: 13px; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.plan-panel.full .plan-request { -webkit-line-clamp: unset; }
+.plan-request .ws-label { display: block; }
+.plan-hint { margin: 0; }
+.plan-editor { flex: 1; min-height: 240px; resize: none; font: 12.5px/1.6 var(--mono); padding: 10px 12px; border-radius: 10px; }
+.plan-state { margin: 10% 12px 0; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; color: var(--ink-3); }
+.plan-state p { margin: 0; color: var(--ink); }
+.plan-state.error, .plan-state.error p { color: var(--warm); }
+.plan-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); background: rgba(255, 255, 255, 0.85); }
+
+/* the plan reads as sections, with each step a card */
+.plan-doc .md h2 { display: flex; align-items: center; gap: 8px; margin: 22px 0 8px; padding: 0; border: 0; font: 600 11.5px var(--sans); text-transform: uppercase; letter-spacing: 0.07em; color: var(--accent-strong); }
+.plan-doc .md h2::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.plan-doc .md h2:first-child { margin-top: 4px; }
+.plan-doc .md h3 { margin: 10px 0 0; padding: 9px 12px 5px; font: 600 14px var(--sans); background: var(--surface); border: 1px solid var(--line); border-bottom: 0; border-radius: 12px 12px 0 0; }
+.plan-doc .md h3 + ul { margin: 0 0 6px; padding: 2px 12px 9px 30px; background: var(--surface); border: 1px solid var(--line); border-top: 0; border-radius: 0 0 12px 12px; }
+.plan-doc .md li { margin: 4px 0; }
+.plan-doc .md h3 + ul > li > strong:first-child { margin-right: 2px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); }
+.plan-doc .md ul { padding-left: 20px; }
+.tool-ref { cursor: help; }
+.tool-ref > code { color: var(--accent-strong); background: var(--accent-soft); border-bottom: 1px dotted var(--accent); }
+.tool-ref:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+.tool-ref-pop { position: fixed; z-index: 60; width: 360px; max-width: calc(100vw - 24px); flex: none; }

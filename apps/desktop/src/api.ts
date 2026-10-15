@@ -445,6 +445,9 @@ export const api = {
     ),
   chatContext: () => request<ContextUsage>("/chat/context"),
   compactChat: () => request<ContextUsage>("/chat/compact", { method: "POST" }),
+  /** Plan mode: the detailed plan of a request, as Markdown to review before anything runs. */
+  draftPlan: (message: string, signal?: AbortSignal) =>
+    request<{ plan: string }>("/chat/plan", { ...json({ message }), signal }).then((r) => r.plan),
   tool: <T = any>(name: string, args: Record<string, unknown>) => request<T>(`/tools/${name}`, json(args)),
   methods: () => request<{ areas: MethodArea[] }>("/methods").then((r) => r.areas),
   freezeBlock: (id: string) => request<Block>(`/panel/blocks/${id}/freeze`, { method: "POST" }),
@@ -620,12 +623,13 @@ async function* sse<T>(body: ReadableStream<Uint8Array>): AsyncGenerator<T> {
   }
 }
 
-export async function* chat(message: string, signal?: AbortSignal): AsyncGenerator<ChatEvent> {
+/** One turn of the conversation; ``plan`` is a plan the user approved in plan mode, which the turn follows. */
+export async function* chat(message: string, signal?: AbortSignal, plan?: string): AsyncGenerator<ChatEvent> {
   const { baseUrl, token } = await engine();
   const res = await fetch(baseUrl + route("/chat"), {
     method: "POST",
     headers: { "content-type": "application/json", "x-qtrix-token": token },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, plan }),
     signal,
   });
   if (!res.ok || !res.body) {

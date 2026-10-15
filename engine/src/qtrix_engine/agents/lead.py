@@ -130,6 +130,7 @@ class _Helpers:
     explainer: Agent[None, fx.Findings]
     compactor: Agent[None, str]
     reporter: Agent[None, rp.ConversationReport]
+    drafter: Agent[None, str]
 
 
 #: Helpers by id of the lead agent they were built with.
@@ -259,7 +260,8 @@ def build_lead_agent(model: Any, *, namespaces: Sequence[str] | None = None, ins
         retries=TOOL_RETRIES,
     )
     _helpers[id(agent)] = _Helpers(pl.build_planner(model, namespaces=namespaces), fx.build_explainer(model),
-                                   ac.build_compactor(model), rp.build_reporter(model))
+                                   ac.build_compactor(model), rp.build_reporter(model),
+                                   pl.build_plan_drafter(model, namespaces=namespaces))
     weakref.finalize(agent, _helpers.pop, id(agent), None)
 
     @agent.instructions
@@ -432,13 +434,25 @@ class ChatSession:
         return ("[Workfile changes the user made since your last answer. They are deliberate: build on them, comment "
                 "on the new versions when relevant, and do not revert them.]\n" + "\n".join(lines) + "\n\n")
 
+    async def draft_plan(self, agent: Agent, message: str) -> str:
+        """Plan mode: the detailed plan of ``message`` as Markdown for the user to edit and approve. Nothing runs and
+        the conversation is left untouched."""
+        helpers = _helpers.get(id(agent))
+        if helpers is None:
+            raise RuntimeError("This agent cannot draft plans.")
+        prompt = pl.planner_prompt(self.user_edits() + message, workspace_context(), list(self.transcript))
+        result = await helpers.drafter.run(prompt, usage_limits=UsageLimits(request_limit=3))
+        return result.output.strip()
+
     async def stream(self, agent: Agent, message: str, *, max_tool_calls: int = 40, plan: bool = True,
-                     context_window: int | None = None, compact_at: float = 0.8) -> AsyncIterator[dict[str, Any]]:
+                     context_window: int | None = None, compact_at: float = 0.8,
+                     approved_plan: str = "") -> AsyncIterator[dict[str, Any]]:
         """One turn, plan-and-execute: the planner drafts the steps, the agent's ReAct loop runs them (and is sent
         back to work while steps are pending), and the turn always closes with a final answer in text.
 
         With a ``context_window``, the history is compacted into a summary whenever it fills ``compact_at`` of it
-        (before the turn and between rounds)."""
+        (before the turn and between rounds). ``approved_plan`` is a plan the user approved in plan mode: it goes
+        with the request so the planner and the executor follow it; the transcript keeps the bare message."""
         ctx = get_context()
         # The panel and the chat are one surface (E7·08c): a turn sits after the last block present when it started.
         blocks = ctx.panel.blocks()
@@ -446,6 +460,8 @@ class ChatSession:
         earlier = list(self.transcript)
         self.transcript.append({"role": "user", "content": message, "after_block": after_block})
         request = self.user_edits() + message
+        if approved_plan.strip():
+            request += pl.approved_plan_prompt(approved_plan)
         turn = start_turn(uuid.uuid4().hex[:12])  # the dispatcher stamps this turn's calls in the journal
         yield {"type": "turn", "turn_id": turn.turn_id, "after_block": after_block}
         state = _TurnState(turn_id=turn.turn_id, budget=max_tool_calls)
@@ -488,6 +504,8 @@ class ChatSession:
                     if not state.plan.pending():
                         break
                     prompt = pl.continue_prompt(state.plan)
+                for ev in self._drop_leaked_call(state):
+                    yield ev
                 if state.asked and not state.final_text():  # the agent asked through the tool but wrote nothing
                     for ev in state.say(pl.questions_text(state.asked)):
                         yield ev
@@ -496,6 +514,8 @@ class ChatSession:
                     with pl.finalizing():
                         async for ev in self._round(agent, pl.final_prompt(message), state, final=True):
                             yield ev
+                    for ev in self._drop_leaked_call(state):
+                        yield ev
                 if not state.final_text():  # the model would not write one: summarise the turn ourselves
                     for ev in state.say(self._fallback_answer(state)):
                         yield ev
@@ -653,6 +673,25 @@ class ChatSession:
                                                           "args": {}, "code": None})
         cell.update({k: v for k, v in out.items() if v is not None or k not in cell})
         return {"type": "tool_result", **out}
+
+    @staticmethod
+    def _drop_leaked_call(state: _TurnState) -> list[dict[str, Any]]:
+        """A final text that is a tool call written as text (a model that cannot call tools says
+        ``scratch_note{...}`` instead of answering) leaves the answer; a note's text is what the model meant to say,
+        so it becomes the answer and the turn's conclusion."""
+        leaked = pl.leaked_call(state.final_text())
+        if leaked is None:
+            return []
+        name, body = leaked
+        strip = sum(map(len, state.tail))
+        del state.answer[-len(state.tail):]
+        state.tail = []
+        events: list[dict[str, Any]] = [{"type": "finding", "ids": [], "text": "", "strip": strip}]
+        note = pl.leaked_note(body) if name in pl.SCRATCH_TOOLS else ""
+        if note:
+            state.scratch.add("conclusion", note)
+            events += state.say(note)
+        return events
 
     @staticmethod
     def _fallback_answer(state: _TurnState) -> str:

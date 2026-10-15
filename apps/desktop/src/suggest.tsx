@@ -3,6 +3,7 @@
 // beside the list (the method's description, a tool's signature, a variable's profile). Suggestions only fill the
 // message in: the agent is still the one that runs anything.
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   api,
   type AnalysisMethod,
@@ -263,6 +264,58 @@ function ToolHelpView({ s }: { s: Suggestion }) {
       )}
       {!t.available && <p className="small unmet">{T("suggest.unavailable", { missing: t.requires.join(", ") })}</p>}
     </>
+  );
+}
+
+/** Whether each name is a registry tool (its help, or null when the engine does not know it), asked once per name. */
+const toolLookup = new Map<string, Promise<ToolHelp | null>>();
+
+/** A tool named in a text (the plan): hovering or focusing it shows the tool's help, the same one the autocomplete
+ * shows. A name the engine does not know as a tool (a variable, say) stays plain code. */
+export function ToolRef({ name }: { name: string }) {
+  const [known, setKnown] = useState(false);
+  const [at, setAt] = useState<DOMRect | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let p = toolLookup.get(name);
+    if (!p) {
+      p = api.toolHelp(name).catch(() => null);
+      toolLookup.set(name, p);
+    }
+    p.then((h) => !cancelled && setKnown(h !== null));
+    return () => {
+      cancelled = true;
+    };
+  }, [name]);
+  if (!known) return <code>{name}</code>;
+
+  const show = (e: { currentTarget: Element }) => setAt(e.currentTarget.getBoundingClientRect());
+  const room = at ? window.innerHeight - at.bottom : 0;
+  // The popup goes in the body: the workspace clips and transforms whatever it contains.
+  const popup = at && (
+    <aside
+      className="suggest-help tool tool-ref-pop"
+      role="tooltip"
+      style={{
+        left: Math.max(12, Math.min(at.left, window.innerWidth - 372)),
+        ...(room < 320 ? { bottom: window.innerHeight - at.top + 6 } : { top: at.bottom + 6 }),
+      }}
+    >
+      <ToolHelpView s={{ text: name, kind: "tool" } as Suggestion} />
+    </aside>
+  );
+  return (
+    <span
+      className="tool-ref"
+      tabIndex={0}
+      onMouseEnter={show}
+      onMouseLeave={() => setAt(null)}
+      onFocus={show}
+      onBlur={() => setAt(null)}
+    >
+      <code>{name}</code>
+      {popup && createPortal(popup, document.body)}
+    </span>
   );
 }
 
