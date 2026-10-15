@@ -156,7 +156,7 @@ h1.editable:hover svg { opacity: 1; }
 /* the conversation inside the panel (E7·08c): a question opens each turn, the answer closes it */
 .turn-head { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; margin-top: 18px; padding-top: 0; border-top: none; animation: enter 0.35s ease-out; }
 .blocks > .turn-head:first-child { margin-top: 0; padding-top: 0; border-top: none; }
-.turn-question { align-self: flex-end; background: var(--accent-soft); color: var(--ink); padding: 10px 16px; border-radius: 18px 18px 4px 18px; max-width: min(720px, 85%); white-space: pre-wrap; font-size: 14px; line-height: 1.55; }
+.turn-question { align-self: flex-end; background: var(--accent); color: #fff; padding: 10px 16px; border-radius: 18px 18px 4px 18px; max-width: min(720px, 85%); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.55; box-shadow: var(--shadow-sm); } /* ponytail: solid accent = clear "me vs agent" split, no avatars needed */
 .turn-toggle { border: none; background: transparent; padding: 2px 4px; font-size: 12px; color: var(--ink-3); }
 .turn-toggle:hover { color: var(--accent); }
 .turn-toggle .rot { transform: rotate(90deg); }
@@ -191,7 +191,7 @@ h1.editable:hover svg { opacity: 1; }
 
 /* the final answer: its own card, set apart from the agent's workspace */
 /* overflow stays visible: as a scroll container the grid would size its row to the header alone */
-.block.answer { grid-column: 1 / -1; overflow: visible; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); box-shadow: var(--shadow); }
+.block.answer { grid-column: 1 / -1; overflow: visible; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 4px 18px 18px 18px; box-shadow: var(--shadow-sm); max-width: min(880px, 100%); }
 .block.answer .answer-head { border-bottom: none; }
 .block.answer .block-body { padding: 4px 20px 14px; }
 .block.answer .md { max-width: 780px; font-size: 15px; line-height: 1.7; }
@@ -290,7 +290,7 @@ h1.editable:hover svg { opacity: 1; }
 .cell-finding > svg { flex: none; margin-top: 3px; color: var(--accent); }
 .cell-finding p { margin: 0 0 4px; }
 .cell-finding p:last-child { margin-bottom: 0; }
-.turn-intro { font-size: 13px; color: var(--ink-2); max-width: min(720px, 100%); }
+.turn-intro { font-size: 13px; color: var(--ink-2); max-width: min(720px, 100%); padding-left: 10px; border-left: 2px solid var(--line-2); }
 .turn-intro p { margin: 0; }
 .cell-note.ok { color: var(--ok); background: var(--ok-soft); }
 .cell-note.warn, .cell-note.fail { color: var(--warm); background: var(--warm-soft); }

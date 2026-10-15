@@ -101,6 +101,9 @@ class StateStore:
         with workspace._lock:
             for ddl in (CHAT_DDL, CHAT_NEXT_STEPS_DDL, LEGACY_PANEL_DDL, PANELS_DDL, THREADS_DDL, REPORTING_DDL):
                 workspace._con.execute(ddl)
+            # ponytail: DuckDB 1.5.6 cannot replay a WAL holding ALTER ADD COLUMN (the notebook then never opens again
+            # after a kill); checkpoint so migrations never sit in the WAL. Drop once DuckDB fixes it.
+            workspace._con.execute("CHECKPOINT")
 
     # ---- threads --------------------------------------------------------------------------------------------
     def threads(self) -> list[dict[str, Any]]:

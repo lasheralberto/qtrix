@@ -170,6 +170,7 @@ class Workspace:
             self._con.execute(VERSIONS_DDL)
             self._con.execute("ALTER TABLE _qtrix_pages ADD COLUMN IF NOT EXISTS sample_spec VARCHAR")
             self._migrate()
+            self._con.execute("CHECKPOINT")  # ponytail: see StateStore: an ALTER left in the WAL cannot be replayed
 
     def checkpoint(self) -> None:
         """Flush the write-ahead log into the database file (before copying it)."""
