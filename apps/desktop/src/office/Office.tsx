@@ -1,22 +1,24 @@
-// The office: a full-screen 3D view of the team at its desks. The room and the avatars live in the canvas; the
-// bottom bar and the readable side panel are plain HTML over it. Movement rules are in state.ts.
+// The office: a full-screen 3D view of the team at its desks, and where the team is set up. The room and the avatars
+// live in the canvas; the side bar on the right (roster, each member's work and settings, the whiteboard) is plain
+// HTML next to it. Movement rules are in state.ts.
 import { OrthographicCamera } from "@react-three/drei";
 import { Canvas, useThree } from "@react-three/fiber";
-import { ClipboardList, LoaderCircle, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { LEAD_ID, type TeamAgent, type TeamConfig } from "../api";
+import { X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { api, LEAD_ID, type SkillInfo, type TeamAgent, type TeamConfig, type UserSettings } from "../api";
 import type { Turn } from "../chat";
 import { T } from "../i18n";
 import type { Reporting } from "../reporting";
 import { mergeAgents } from "../workspace";
 import { Avatar, type AgentLive } from "./avatar";
 import { BOARD_SPOT, COFFEE_SPOT, layoutDesks, READING_ZONE, same, type Dir } from "./grid";
-import { boardLines, OfficePanel, type Panel } from "./panel";
+import { boardLines, OfficeSide, type Panel, type Tab } from "./panel";
 import { Cat, CoffeeMachine, DeskMesh, Floor, Poster, Walls, Whiteboard } from "./room";
 import { office, useOffice } from "./state";
 
 export interface OfficeProps {
-  team?: TeamConfig;
+  settings: UserSettings;
+  onSaved(s: UserSettings): void;
   turns: Turn[];
   /** The turn shown in the panels (null = the latest), shared with the workspace. */
   turnKey: string | null;
@@ -29,6 +31,7 @@ export interface OfficeProps {
 type Member = Pick<TeamAgent, "id" | "name" | "emoji" | "enabled">;
 /** The lead when settings have no team yet. */
 const LEAD: Member = { id: LEAD_ID, name: "", emoji: "", enabled: true };
+const NO_TEAM: TeamConfig = { enabled: false, agents: [] };
 const ARROWS: Record<string, Dir> = { ArrowUp: "n", ArrowDown: "s", ArrowLeft: "w", ArrowRight: "e" };
 
 function hasWebGL(): boolean {
@@ -60,14 +63,49 @@ function CameraRig({ zoom }: { zoom: number }) {
 }
 
 export function Office(props: OfficeProps) {
-  const { onClose, turns } = props;
+  const { settings, onSaved, turns } = props;
   const webgl = useMemo(hasWebGL, []);
   const [zoom, setZoom] = useState(1);
-  // The lead always; the other members only with the team on and the member available.
+  const team = settings.team ?? NO_TEAM;
+  // The lead always; the other members only with the team on and the member available. The room shows the saved
+  // team: edits in the side bar take a seat once saved.
   const members = useMemo<Member[]>(() => {
-    const agents: Member[] = props.team?.agents.length ? props.team.agents : [LEAD];
-    return props.team?.enabled ? agents.filter((a) => a.enabled || a.id === LEAD_ID) : agents.slice(0, 1);
-  }, [props.team]);
+    const agents: Member[] = team.agents.length ? team.agents : [LEAD];
+    return team.enabled ? agents.filter((a) => a.enabled || a.id === LEAD_ID) : agents.slice(0, 1);
+  }, [team]);
+
+  // The team being edited in the side bar; it starts over from the saved one whenever that changes.
+  const [draft, setDraft] = useState<TeamConfig>(team);
+  useEffect(() => setDraft(team), [team]);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(team);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [skills, setSkills] = useState<SkillInfo[]>([]);
+  useEffect(() => {
+    api.skills().then(setSkills).catch(() => {});
+  }, []);
+  const save = async () => {
+    if (draft.agents.some((a) => !a.name.trim())) return setError(T("team.nameRequired"));
+    setSaving(true);
+    setError(null);
+    try {
+      onSaved(await api.saveSettings({ ...settings, team: draft }));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const discard = () => {
+    setDraft(team);
+    setError(null);
+  };
+  // Leaving with unsaved changes to the team asks first.
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const onClose = useCallback(() => {
+    if (!dirtyRef.current || window.confirm(T("office.unsaved"))) props.onClose();
+  }, [props.onClose]); // eslint-disable-line react-hooks/exhaustive-deps
   const desks = useMemo(() => layoutDesks(members.map((m) => m.id)), [members]);
   useEffect(() => office.setDesks(desks), [desks]);
   const state = useOffice();
@@ -137,9 +175,21 @@ export function Office(props: OfficeProps) {
   const merged = useMemo(() => mergeAgents(turns.slice(0, at + 1)), [turns, at]);
   const go = (i: number) => props.onSelectTurn(i >= turns.length - 1 ? null : turns[i].key);
 
-  // What the controlled agent is looking at: it opens on arriving at a chair or at the whiteboard, and closes on
-  // Escape or on walking away.
+  // The side bar and what it shows: a member (its work or its settings) or the whiteboard. Walking the controlled
+  // agent to a chair or to the whiteboard opens it there; walking away (or Escape) closes it.
+  const [sideOpen, setSideOpen] = useState(true);
   const [panel, setPanel] = useState<Panel | null>(null);
+  const [tab, setTab] = useState<Tab>("work");
+  const show = (p: Panel | null) => {
+    setPanel(p);
+    if (p) setSideOpen(true);
+  };
+  const pick = (id: string) => {
+    show({ kind: "desk", id });
+    if (state.positions[id]) office.select(id);
+    // A member not saved yet has no work to show.
+    if (!members.some((m) => m.id === id)) setTab("config");
+  };
   const sel = state.selected ? state.positions[state.selected] : undefined;
   const selTile = sel ? `${state.selected}@${sel.tile.x},${sel.tile.z}` : "";
   const prevSel = useRef(selTile);
@@ -149,14 +199,16 @@ export function Office(props: OfficeProps) {
     prevSel.current = selTile;
     if (!sel || !stepped) return;
     const desk = desks.find((d) => same(d.chair, sel.tile));
-    if (desk) setPanel({ kind: "desk", id: desk.id });
-    else if (READING_ZONE.some((t) => same(t, sel.tile))) setPanel({ kind: "board" });
+    if (desk) {
+      show({ kind: "desk", id: desk.id });
+      setTab("work");
+    } else if (READING_ZONE.some((t) => same(t, sel.tile))) show({ kind: "board" });
     else setPanel(null);
     // The tile is the trigger; `sel` itself is a new object on every store update.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selTile, desks]);
 
-  // Arrow keys walk the selected agent, Enter sits it down; Escape closes the panel, then the office. The office
+  // Arrow keys walk the selected agent, Enter sits it down; Escape closes the panel, then the side bar, then the office. The office
   // covers the app, so it takes these keys first (capture) and keeps them from the listeners underneath — the
   // workspace would otherwise close on the same Escape.
   useEffect(() => {
@@ -168,6 +220,7 @@ export function Office(props: OfficeProps) {
       if (e.key === "Escape") {
         take(e);
         if (panel) setPanel(null);
+        else if (sideOpen) setSideOpen(false);
         else onClose();
         return;
       }
@@ -184,7 +237,7 @@ export function Office(props: OfficeProps) {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose, panel]);
+  }, [onClose, panel, sideOpen]);
 
   // The whiteboard: the report (reporting on) or the lead's answer of the shown turn, once it is settled — a turn
   // still streaming keeps the board as it was. When it changes while the office follows the latest turn, the lead
@@ -218,11 +271,6 @@ export function Office(props: OfficeProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text]);
 
-  const nameOf = (id: string) => {
-    const m = members.find((x) => x.id === id);
-    return `${m?.emoji ?? ""} ${m?.name ?? ""}`.trim() || "—";
-  };
-
   return (
     <div className="office" role="dialog" aria-label={T("office.title")}>
       <header className="office-top">
@@ -233,79 +281,82 @@ export function Office(props: OfficeProps) {
           <X size={16} />
         </button>
       </header>
-      <div className="office-stage" onWheel={(e) => setZoom((z) => Math.min(1.6, Math.max(0.7, z - e.deltaY * 0.001)))}>
-        {webgl ? (
-          <Canvas shadows="percentage">
-            <color attach="background" args={["#dbeafe"]} />
-            <CameraRig zoom={zoom} />
-            <hemisphereLight args={["#ffffff", "#c9b8a8", 0.9]} />
-            <directionalLight
-              position={[6, 12, 4]}
-              intensity={1.6}
-              castShadow
-              shadow-mapSize={[2048, 2048]}
-              shadow-camera-left={-10}
-              shadow-camera-right={10}
-              shadow-camera-top={10}
-              shadow-camera-bottom={-10}
-            />
-            <Floor />
-            <Walls />
-            <Whiteboard lines={lines} chars={chars} />
-            <CoffeeMachine />
-            <Poster />
-            {desks.map((d, i) => (
-              <DeskMesh key={d.id} desk={d} lead={i === 0} running={live[d.id]?.running ?? false} lit={worked.has(d.id)} failed={live[d.id]?.failed ?? false} />
-            ))}
-            {members.map((m) =>
-              state.positions[m.id] ? (
-                <Avatar
-                  key={m.id}
-                  id={m.id}
-                  name={m.name}
-                  emoji={m.emoji}
-                  pos={state.positions[m.id]}
-                  selected={state.selected === m.id}
-                  live={live[m.id]}
-                />
-              ) : null,
-            )}
-            <Cat tile={state.cat} />
-          </Canvas>
-        ) : (
-          <div className="office-nowebgl">
-            <p>{T("office.noWebgl")}</p>
-            <button className="primary" onClick={onClose}>
-              {T("office.close")}
-            </button>
-          </div>
-        )}
-        <nav className="office-bar" aria-label={T("office.title")}>
-          {members.map((m) => (
-            <button key={m.id} className={`office-chip ${state.selected === m.id ? "on" : ""}`} onClick={() => office.select(m.id)} title={m.name}>
-              {live[m.id]?.running ? <LoaderCircle size={13} className="spin" /> : <span aria-hidden>{m.emoji || "🧑‍💼"}</span>}
-              <span className="office-chip-name">{m.name || "—"}</span>
-            </button>
-          ))}
-          <button className={`office-chip ${panel?.kind === "board" ? "on" : ""}`} onClick={() => setPanel({ kind: "board" })}>
-            <ClipboardList size={13} /> <span className="office-chip-name">{T("office.whiteboard")}</span>
-          </button>
-        </nav>
-        {panel && (
-          <OfficePanel
-            panel={panel}
-            turn={turn}
-            member={panel.kind === "desk" && panel.id !== members[0]?.id ? merged.find((a) => a.id === panel.id) : undefined}
-            lead={panel.kind === "desk" && panel.id === members[0]?.id}
-            memberName={panel.kind === "desk" ? nameOf(panel.id) : ""}
-            report={report}
-            at={at}
-            total={turns.length}
-            onGo={go}
-            onClose={() => setPanel(null)}
-            onOpenObject={props.onOpenObject}
-          />
-        )}
+      <div className="office-body">
+        <div className="office-stage" onWheel={(e) => setZoom((z) => Math.min(1.6, Math.max(0.7, z - e.deltaY * 0.001)))}>
+          {webgl ? (
+            <Canvas shadows="percentage">
+              <color attach="background" args={["#dbeafe"]} />
+              <CameraRig zoom={zoom} />
+              <hemisphereLight args={["#ffffff", "#c9b8a8", 0.9]} />
+              <directionalLight
+                position={[6, 12, 4]}
+                intensity={1.6}
+                castShadow
+                shadow-mapSize={[2048, 2048]}
+                shadow-camera-left={-10}
+                shadow-camera-right={10}
+                shadow-camera-top={10}
+                shadow-camera-bottom={-10}
+              />
+              <Floor />
+              <Walls />
+              <Whiteboard lines={lines} chars={chars} />
+              <CoffeeMachine />
+              <Poster />
+              {desks.map((d, i) => (
+                <DeskMesh key={d.id} desk={d} lead={i === 0} running={live[d.id]?.running ?? false} lit={worked.has(d.id)} failed={live[d.id]?.failed ?? false} />
+              ))}
+              {members.map((m) =>
+                state.positions[m.id] ? (
+                  <Avatar
+                    key={m.id}
+                    id={m.id}
+                    name={m.name}
+                    emoji={m.emoji}
+                    pos={state.positions[m.id]}
+                    selected={state.selected === m.id}
+                    live={live[m.id]}
+                  />
+                ) : null,
+              )}
+              <Cat tile={state.cat} />
+            </Canvas>
+          ) : (
+            <div className="office-nowebgl">
+              <p>{T("office.noWebgl")}</p>
+              <button className="primary" onClick={onClose}>
+                {T("office.close")}
+              </button>
+            </div>
+          )}
+        </div>
+        <OfficeSide
+          open={sideOpen}
+          onToggle={() => setSideOpen((o) => !o)}
+          draft={draft}
+          onDraft={setDraft}
+          dirty={dirty}
+          saving={saving}
+          error={error}
+          onSave={save}
+          onDiscard={discard}
+          skills={skills}
+          profiles={settings.profiles.map((p) => p.name)}
+          live={live}
+          selected={state.selected}
+          panel={panel}
+          onPanel={show}
+          tab={tab}
+          onTab={setTab}
+          onPick={pick}
+          turn={turn}
+          workOf={(id) => merged.find((a) => a.id === id)}
+          report={report}
+          at={at}
+          total={turns.length}
+          onGo={go}
+          onOpenObject={props.onOpenObject}
+        />
       </div>
     </div>
   );

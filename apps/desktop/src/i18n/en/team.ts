@@ -1,13 +1,11 @@
-// English texts: the agent team (team.tsx) and its tabs in the workspace (workspace.tsx)
+// English texts: the agent team (office/member.tsx, office/panel.tsx) and its tabs in the workspace (workspace.tsx)
 export const team = {
-  "team.button": "Agent team",
   "team.title": "Agent team",
   "team.enabled": "Team on",
   "team.offHint": "The team is off: the default agent works alone. Turn it on to let it call on the other members.",
   "team.defaultBadge": "Default",
   "team.leadHint": "The default agent answers every message: it plans the work, hands parts of it to the other members when the team is on, and writes the final answer. It cannot be removed.",
   "team.leadModel": "Uses the model chosen in the chat.",
-  "team.close": "Close",
   "team.members": "Team members",
   "team.add": "Add member",
   "team.count": "{count} of {max} members",
@@ -24,7 +22,6 @@ export const team = {
   "team.noSkills": "No skills available.",
   "team.remove": "Remove member",
   "team.nameRequired": "Every member needs a name.",
-  "team.cancel": "Cancel",
   "team.save": "Save",
   "team.leadTab": "Lead",
   "team.task": "Task",
