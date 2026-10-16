@@ -5,7 +5,8 @@ import { chat } from "./en/chat";
 import { data } from "./en/data";
 import { models } from "./en/models";
 import { notebooks } from "./en/notebooks";
+import { office } from "./en/office";
 import { plan } from "./en/plan";
 import { team } from "./en/team";
 
-export const i18n_en = { ...app, ...chat, ...cells, ...data, ...models, ...notebooks, ...plan, ...team } as const;
+export const i18n_en = { ...app, ...chat, ...cells, ...data, ...models, ...notebooks, ...office, ...plan, ...team } as const;

@@ -329,7 +329,7 @@ export function Workspace(props: {
 }
 
 /** A member's conclusions so far: one stretch per turn it worked in, headed by the question of that turn. */
-function MemberConclusions({ agent: a }: { agent: AgentWork }) {
+export function MemberConclusions({ agent: a }: { agent: AgentWork }) {
   const text = a.text || (a.ok === false ? T("team.memberFailed") : T("team.noConclusions"));
   return (
     <div className={`ws-card ${a.ok === false ? "issue" : "conclusion"}`}>
@@ -348,7 +348,7 @@ function MemberConclusions({ agent: a }: { agent: AgentWork }) {
 /** The team as the turns up to the one shown leave it: each member once, in order of first appearance, with the
  * work of every turn it took part in folded into one — cells and notes appended, the latest plan and task, and its
  * conclusions joined turn by turn under the question that asked for them. */
-function mergeAgents(turns: Turn[]): AgentWork[] {
+export function mergeAgents(turns: Turn[]): AgentWork[] {
   const out = new Map<string, AgentWork>();
   for (const t of turns) {
     for (const a of t.agents ?? []) {
@@ -410,7 +410,7 @@ function EmptyWorkspace() {
   );
 }
 
-function TurnWork({ turn, onOpenObject }: { turn: Work; onOpenObject(name: string, blockId?: string | null): void }) {
+export function TurnWork({ turn, onOpenObject }: { turn: Work; onOpenObject(name: string, blockId?: string | null): void }) {
   const steps = turn.plan ?? [];
   const current = currentStep(turn);
   const notes = turn.scratch?.notes ?? [];

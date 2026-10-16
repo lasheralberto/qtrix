@@ -793,23 +793,49 @@ body.report-printing .report-page { width: auto; min-height: 0; margin: 0; paddi
 .ws-tabs.many { overflow-x: auto; scrollbar-width: thin; }
 .ws-tabs.many button { flex: 0 0 auto; white-space: nowrap; gap: 4px; }
 .ws-question .ws-label { margin-right: 6px; }
-.team-modal { height: min(720px, 88vh); }
-.team-modal > header .ghost { margin-left: 0; }
-.team-switch { margin: 0 0 0 auto; font-size: 13px; }
+.team-switch { margin: 0; font-size: 13px; }
 .team-detail { display: flex; flex-direction: column; gap: 10px; }
-.team-form { display: flex; flex-direction: column; gap: 14px; max-width: 720px; }
+.team-form { display: flex; flex-direction: column; gap: 14px; }
 .team-form textarea { resize: vertical; }
 .team-emoji { width: 72px; }
 .team-emoji input { text-align: center; }
-.team-name { flex: 1; min-width: 200px; }
+.team-name { flex: 1; min-width: 0; }
 .team-enabled { align-self: flex-end; }
 .team-skills { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin: 0; }
 .team-skills legend { padding: 0 4px; font-size: 13px; }
 .team-skill { align-items: flex-start; flex-wrap: nowrap; }
 .team-skill .muted { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .team-remove { align-self: flex-start; }
-.methods-nav button.off { opacity: 0.55; }
+.office-roster button.off { opacity: 0.55; }
 .team-add { margin-top: 6px; color: var(--accent); }
-.team-count { padding: 4px 10px; margin: 0; }
 .team-error { color: var(--warm); margin-right: auto; }
 .team-badge { margin-left: auto; }
+
+/* The 3D office: full-screen overlay; the canvas fills the stage, the team side bar slides in on its right. */
+.office { position: fixed; inset: 0; z-index: 60; background: #dbeafe; display: flex; flex-direction: column; }
+.office-top { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.office-title { font-weight: 600; white-space: nowrap; }
+.office-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.office-stage { position: relative; flex: 1; min-height: 0; }
+.office-stage canvas { outline: none; }
+.office-nowebgl { height: 100%; margin: 0 auto; text-align: center; max-width: 420px; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; }
+.office-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.office-side { position: relative; z-index: 20; flex: none; width: 400px; max-width: 45vw; background: var(--surface); border-left: 1px solid var(--line); box-shadow: var(--shadow); transition: width 0.25s ease, max-width 0.25s ease; }
+.office-side.closed { width: 0; max-width: 0; border-left: none; }
+.office-side-inner { position: absolute; inset: 0 auto 0 0; width: min(400px, 45vw); display: flex; flex-direction: column; overflow: hidden; }
+.office-side-handle { position: absolute; top: 12px; left: -46px; z-index: 1; padding: 7px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); }
+.office-side-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.office-roster { display: flex; flex-direction: column; gap: 2px; padding: 8px; border-bottom: 1px solid var(--line); background: var(--surface-2); max-height: 38%; overflow-y: auto; flex: none; }
+.office-roster button { justify-content: flex-start; text-align: left; padding: 6px 10px; border-color: transparent; }
+.office-roster button.on { background: var(--accent-soft); color: var(--accent-strong); }
+.office-roster-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.office-roster-foot { justify-content: space-between; padding-right: 10px; }
+.office-roster-tail { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.office-here { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+.office-off { margin: 4px 10px; }
+.office-side-empty { padding: 16px; margin: 0; }
+.office-detail { flex: 1; min-height: 0; display: flex; flex-direction: column; animation: enter 0.25s ease-out; }
+.office-detail .ws-head { padding: 10px 12px 6px; border-bottom: 1px solid var(--line); }
+.office-side-foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); background: var(--surface); }
+.office-report h3 { margin: 0 0 6px; font-family: var(--serif); font-size: 17px; }
+.office-report h4 { margin: 12px 0 4px; font-size: 12.5px; }
